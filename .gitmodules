@@ -1,0 +1,3 @@
+[submodule "deps/librealsense"]
+	path = deps/librealsense
+	url = git@github.com:awenbigprawn/librealsense.git
