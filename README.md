@@ -114,3 +114,7 @@ after pipeline object construction: 8 -> 9   delta +1
 after pipeline.start:               9 -> 18  delta +9
 after pipeline.stop and destroy:    18 -> 14 delta -4
 ```
+
+## Helper Scripts
+
+Adapted helper scripts live in `scripts/`; see `scripts/README.md` for usage. The CPU frequency, ftrace, setcap, dependency-update, and priority-watch helpers work directly in this repo. The LIME helpers require `deps/lime-rtw` or `LIME_REPO_PATH=/home/vub/multithreadedf/deps/lime-rtw`.
