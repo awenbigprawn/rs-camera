@@ -9,6 +9,7 @@ EXEC_NAME="${EXEC_NAME:-d435_sensor_probe}"
 EXEC_PATH="$BUILD_DIR/$EXEC_NAME"
 OUTPUT="${OUTPUT:-$GIT_ROOT/lime_trace_out}"
 ADDITIONAL_ARGS=""
+BEST_EFFORT=0
 
 usage() {
   echo "usage: $0 [--exec d435_sensor_probe|smallest_test] [--out PATH] [--best-effort] [-- executable-args...]" >&2
@@ -29,6 +30,7 @@ while [ $# -gt 0 ]; do
       ;;
     --best-effort|-b)
       ADDITIONAL_ARGS="$ADDITIONAL_ARGS --best-effort"
+      BEST_EFFORT=1
       shift 1
       ;;
     --)
@@ -57,11 +59,22 @@ if [ ! -x "$LIME_PATH" ]; then
 fi
 
 cmake --build "$BUILD_DIR" --target "$EXEC_NAME" --parallel "$(nproc)"
-"$GIT_ROOT/scripts/setcap.sh" "$EXEC_PATH"
+if [ "$BEST_EFFORT" -eq 1 ]; then
+  if ! "$GIT_ROOT/scripts/setcap.sh" "$EXEC_PATH"; then
+    echo "warning: failed to set cap_sys_nice on $EXEC_PATH; continuing in best-effort mode" >&2
+  fi
+else
+  "$GIT_ROOT/scripts/setcap.sh" "$EXEC_PATH"
+fi
 
 if [ ! -x "$EXEC_PATH" ]; then
   echo "$EXEC_NAME not found at $EXEC_PATH" >&2
   exit 1
 fi
 
-sudo "$LIME_PATH" trace -o "$OUTPUT" $ADDITIONAL_ARGS -- "$EXEC_PATH" "$@"
+if [ "$BEST_EFFORT" -eq 1 ] && ! sudo -n true 2>/dev/null; then
+  echo "warning: sudo unavailable; running lime-rtw without sudo in best-effort mode" >&2
+  "$LIME_PATH" trace -o "$OUTPUT" $ADDITIONAL_ARGS -- "$EXEC_PATH" "$@"
+else
+  sudo "$LIME_PATH" trace -o "$OUTPUT" $ADDITIONAL_ARGS -- "$EXEC_PATH" "$@"
+fi

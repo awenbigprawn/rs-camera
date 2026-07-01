@@ -1,3 +1,6 @@
 [submodule "deps/librealsense"]
 	path = deps/librealsense
 	url = git@github.com:awenbigprawn/librealsense.git
+[submodule "deps/lime-rtw"]
+	path = deps/lime-rtw
+	url = git@github.com:LiME-org/lime-rtw.git
