@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "GDB RealSense thread lifecycle probe",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-realsense-thread-trace/realsense_thread_lifecycle_probe",
+      "args": [
+        "--frames",
+        "1",
+        "--steady-state-after",
+        "0"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build realsense thread lifecycle probe",
+      "stopAtEntry": true,
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Show thread events",
+          "text": "set print thread-events on"
+        },
+        {
+          "description": "Allow pending breakpoints",
+          "text": "set breakpoint pending on"
+        }
+      ]
+    }
+  ]
+}

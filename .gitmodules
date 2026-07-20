@@ -4,3 +4,6 @@
 [submodule "deps/lime-rtw"]
 	path = deps/lime-rtw
 	url = git@github.com:LiME-org/lime-rtw.git
+[submodule "deps/benchkit"]
+	path = deps/benchkit
+	url = git@github.com:open-s4c/benchkit.git

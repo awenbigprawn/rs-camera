@@ -1,0 +1,11 @@
+{
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.generator": "Ninja",
+  "cmake.configureSettings": {
+    "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+  },
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.compilerPath": "/usr/bin/c++",
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.intelliSenseEngine": "default"
+}

@@ -48,10 +48,15 @@ add_executable(
     realsense_thread_lifecycle_probe
     tools/realsense_thread_trace/realsense_thread_lifecycle_probe.cpp
 )
+add_executable(
+    realsense_usb_latency_probe
+    tools/realsense_usb_topology_bench/realsense_usb_latency_probe.cpp
+)
 
 target_compile_features(smallest_test PRIVATE cxx_std_17)
 target_compile_features(d435_sensor_probe PRIVATE cxx_std_17)
 target_compile_features(realsense_thread_lifecycle_probe PRIVATE cxx_std_17)
+target_compile_features(realsense_usb_latency_probe PRIVATE cxx_std_17)
 
 target_include_directories(
     smallest_test
@@ -69,6 +74,12 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/realsense_thread_trace"
 )
+target_include_directories(
+    realsense_usb_latency_probe
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/realsense_usb_topology_bench"
+)
 
 target_link_libraries(
     smallest_test
@@ -84,6 +95,12 @@ target_link_libraries(
 )
 target_link_libraries(
     realsense_thread_lifecycle_probe
+    PRIVATE
+        "${RS_CAMERA_LIBREALSENSE_TARGET}"
+        Threads::Threads
+)
+target_link_libraries(
+    realsense_usb_latency_probe
     PRIVATE
         "${RS_CAMERA_LIBREALSENSE_TARGET}"
         Threads::Threads
