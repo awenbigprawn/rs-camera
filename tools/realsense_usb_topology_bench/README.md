@@ -28,7 +28,7 @@ Physical variables such as USB2 vs USB3, hub/no-hub, same root hub vs different 
 
 ## Files
 
-- `realsense_usb_latency_probe.cpp`: measurement binary linked against librealsense.
+- `src/realsense_usb_latency_probe.cpp`: measurement binary linked against librealsense.
 - `run_usb_topology_campaign.py`: benchkit campaign runner.
 - `snapshot_topology.py`: captures USB/xHCI topology and interrupt counters.
 - `configs/smoke_matrix.json`: short one-camera smoke matrix.

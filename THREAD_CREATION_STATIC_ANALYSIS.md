@@ -6,7 +6,7 @@
 - librealsense source root: `deps/librealsense`
 - librealsense commit: `9d7cc8ed9b4080a4e00fc68eb57e3d8961c6938a` (`Push 2.58.2 to master (#15206)`)
 - Build system: top-level CMake project, vendored `add_subdirectory(deps/librealsense EXCLUDE_FROM_ALL)`
-- Trace probe: `tools/realsense_thread_trace/realsense_thread_lifecycle_probe.cpp`
+- Trace probe: `src/realsense_thread_lifecycle_probe.cpp`
 - Debug build script: `tools/realsense_thread_trace/build_librs_debug.sh`
 - Verified runtime library path from `tools/realsense_thread_trace/output/ldd.txt`:
   `build-realsense-thread-trace/RelWithDebInfo/librealsense2.so.2.58`

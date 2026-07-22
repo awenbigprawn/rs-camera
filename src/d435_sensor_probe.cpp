@@ -1,8 +1,11 @@
+#include "rs_camera/trace_marker.h"
+
 #include <librealsense2/rs.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdlib>
 #include <cctype>
@@ -10,10 +13,10 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
-#include <memory>
+#include <mutex>
 #include <pthread.h>
+#include <sched.h>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -25,14 +28,23 @@
 
 namespace
 {
-std::atomic_bool keep_running{ true };
+using clock_type = std::chrono::steady_clock;
+
+std::atomic_bool keep_running{true};
 
 struct options
 {
     std::string serial;
     int frames = 0;
+    int cycles = 1;
+    int frame_timeout_ms = 1500;
+    int join_timeout_ms = 10;
+    int cycle_delay_ms = 0;
+    int reset_timeout_ms = 5000;
+    bool hardware_reset = false;
     bool enable_all_streams = false;
     bool try_all_ir = true;
+    bool strict_streams = false;
     bool list_only = false;
 };
 
@@ -47,576 +59,614 @@ struct stream_key
     rs2_stream stream = RS2_STREAM_ANY;
     int index = -1;
 
-    bool operator<( const stream_key & other ) const
+    bool operator<(const stream_key &other) const
     {
-        return std::make_pair( stream, index ) < std::make_pair( other.stream, other.index );
+        return std::make_pair(stream, index) < std::make_pair(other.stream, other.index);
     }
 };
 
 struct selected_profile
 {
     rs2::stream_profile profile;
-    std::string reason;
+    int score = 0;
 };
 
-struct stream_sample
-{
-    unsigned long long count = 0;
-    unsigned long long frame_number = 0;
-    double timestamp_ms = 0.0;
-    rs2_format format = RS2_FORMAT_ANY;
-    int width = 0;
-    int height = 0;
-    int stride = 0;
-    int bytes = 0;
-    float center_depth_m = 0.0f;
-    rs2_vector motion = {};
-    bool has_motion = false;
-    bool has_depth = false;
-};
-
-void on_signal( int )
+void on_signal(int)
 {
     keep_running = false;
 }
 
-std::string read_first_line( const std::string & path )
+double elapsed_ms(clock_type::time_point begin, clock_type::time_point end)
 {
-    std::ifstream in( path );
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+std::string read_first_line(const std::string &path)
+{
+    std::ifstream in(path);
     std::string line;
-    std::getline( in, line );
+    std::getline(in, line);
     return line;
 }
 
-std::vector< thread_info > read_threads()
+std::vector<thread_info> read_threads()
 {
-    std::vector< thread_info > threads;
-    DIR * dir = opendir( "/proc/self/task" );
-    if( ! dir )
+    std::vector<thread_info> threads;
+    DIR *dir = opendir("/proc/self/task");
+    if (!dir)
         return threads;
 
-    while( auto * entry = readdir( dir ) )
+    while (auto *entry = readdir(dir))
     {
         const std::string name = entry->d_name;
-        if( name.empty() || ! std::all_of( name.begin(), name.end(), []( unsigned char ch ) { return std::isdigit( ch ); } ) )
+        if (name.empty()
+            || !std::all_of(name.begin(), name.end(), [](unsigned char ch) { return std::isdigit(ch); }))
             continue;
 
-        thread_info info;
-        info.tid = std::stoi( name );
-        info.name = read_first_line( "/proc/self/task/" + name + "/comm" );
-        threads.push_back( info );
+        threads.push_back({std::stoi(name), read_first_line("/proc/self/task/" + name + "/comm")});
     }
-
-    closedir( dir );
-    std::sort( threads.begin(), threads.end(), []( const thread_info & a, const thread_info & b ) { return a.tid < b.tid; } );
+    closedir(dir);
+    std::sort(threads.begin(), threads.end(), [](const auto &a, const auto &b) { return a.tid < b.tid; });
     return threads;
 }
 
-void print_thread_delta( const std::string & title,
-                         const std::vector< thread_info > & before,
-                         const std::vector< thread_info > & after )
+std::set<int> thread_ids(const std::vector<thread_info> &threads)
 {
-    std::set< int > previous;
-    for( const auto & t : before )
-        previous.insert( t.tid );
+    std::set<int> result;
+    for (const auto &thread : threads)
+        result.insert(thread.tid);
+    return result;
+}
 
-    std::cout << "\n[" << title << "] threads: " << before.size() << " -> " << after.size()
-              << " (delta " << static_cast< long >( after.size() ) - static_cast< long >( before.size() ) << ")\n";
-
-    for( const auto & t : after )
+std::vector<thread_info> extra_threads(const std::set<int> &baseline)
+{
+    std::vector<thread_info> result;
+    for (const auto &thread : read_threads())
     {
-        if( previous.count( t.tid ) == 0 )
-            std::cout << "  + tid=" << t.tid << " name=" << t.name << '\n';
+        if (baseline.count(thread.tid) == 0)
+            result.push_back(thread);
     }
+    return result;
 }
 
-void print_thread_model_notes()
+std::vector<thread_info> wait_for_threads_to_join(const std::set<int> &baseline, int timeout_ms)
 {
-    std::cout
-        << "\nSource-backed librealsense thread model notes for this probe:\n"
-        << "  - pipeline::pipeline owns one dispatcher used for pipeline control/restart callbacks.\n"
-        << "  - dispatcher creates one std::thread and runs queued actions serially.\n"
-        << "  - processing_block/syncer/aggregator run inline on backend callback threads; they do not create extra worker threads here.\n"
-        << "  - Linux native UVC/V4L2 creates one capture thread per active UVC device, normally Stereo Module and RGB Camera for D435.\n"
-        << "  - RSUSB/libusb backend creates dispatchers, a libusb event thread, and per-stream active_object publish/watchdog workers.\n"
-        << "  - HID motion sensors create HID read/power-management threads, but plain D435 PID 0x0b07 is not in the D400 HID/IMU PID set; D435i is.\n";
+    const auto deadline = clock_type::now() + std::chrono::milliseconds(timeout_ms);
+    auto extra = extra_threads(baseline);
+    while (!extra.empty() && clock_type::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        extra = extra_threads(baseline);
+    }
+    return extra;
 }
 
-std::string info_or_unknown( const rs2::device & dev, rs2_camera_info info )
-{
-    return dev.supports( info ) ? dev.get_info( info ) : "unknown";
-}
-
-std::string sensor_info_or_unknown( const rs2::sensor & sensor, rs2_camera_info info )
-{
-    return sensor.supports( info ) ? sensor.get_info( info ) : "unknown";
-}
-
-std::string profile_to_string( const rs2::stream_profile & profile )
+std::string cycle_marker(int cycle, const std::string &phase)
 {
     std::ostringstream out;
-    out << profile.stream_name() << " idx=" << profile.stream_index()
-        << " fmt=" << rs2_format_to_string( profile.format() )
-        << " fps=" << profile.fps();
-    if( auto video = profile.as< rs2::video_stream_profile >() )
-        out << " " << video.width() << "x" << video.height();
-    if( profile.is_default() )
-        out << " default";
+    out << "cycle_" << std::setw(2) << std::setfill('0') << cycle << "_" << phase;
     return out.str();
 }
 
-void print_device_inventory( const rs2::device & dev )
+void mark_cycle(int cycle, const std::string &phase)
 {
-    std::cout << "Device:\n";
-    std::cout << "  name: " << info_or_unknown( dev, RS2_CAMERA_INFO_NAME ) << '\n';
-    std::cout << "  serial: " << info_or_unknown( dev, RS2_CAMERA_INFO_SERIAL_NUMBER ) << '\n';
-    std::cout << "  product line: " << info_or_unknown( dev, RS2_CAMERA_INFO_PRODUCT_LINE ) << '\n';
-    std::cout << "  product id: " << info_or_unknown( dev, RS2_CAMERA_INFO_PRODUCT_ID ) << '\n';
-    std::cout << "  firmware: " << info_or_unknown( dev, RS2_CAMERA_INFO_FIRMWARE_VERSION ) << '\n';
+    const auto marker = cycle_marker(cycle, phase);
+    rs_trace_phase_marker(marker.c_str());
+}
 
-    auto sensors = dev.query_sensors();
-    std::cout << "Sensors: " << sensors.size() << '\n';
-    for( size_t i = 0; i < sensors.size(); ++i )
+std::string json_escape(const std::string &value)
+{
+    std::ostringstream out;
+    for (const unsigned char ch : value)
     {
-        const auto & sensor = sensors[i];
-        std::cout << "  [" << i << "] " << sensor_info_or_unknown( sensor, RS2_CAMERA_INFO_NAME ) << '\n';
-
-        auto profiles = sensor.get_stream_profiles();
-        std::sort( profiles.begin(), profiles.end(), []( const rs2::stream_profile & a, const rs2::stream_profile & b ) {
-            auto av = a.as< rs2::video_stream_profile >();
-            auto bv = b.as< rs2::video_stream_profile >();
-            return std::make_tuple( a.stream_type(), a.stream_index(), a.fps(), av ? av.width() : 0, av ? av.height() : 0, a.format() )
-                < std::make_tuple( b.stream_type(), b.stream_index(), b.fps(), bv ? bv.width() : 0, bv ? bv.height() : 0, b.format() );
-        } );
-
-        std::map< stream_key, int > profile_counts;
-        for( const auto & profile : profiles )
-            ++profile_counts[{ profile.stream_type(), profile.stream_index() }];
-
-        for( const auto & entry : profile_counts )
+        switch (ch)
         {
-            std::cout << "      " << rs2_stream_to_string( entry.first.stream )
-                      << " idx=" << entry.first.index << " profiles=" << entry.second << '\n';
+        case '\\': out << "\\\\"; break;
+        case '"': out << "\\\""; break;
+        case '\n': out << "\\n"; break;
+        case '\r': out << "\\r"; break;
+        case '\t': out << "\\t"; break;
+        default:
+            if (ch >= 0x20)
+                out << static_cast<char>(ch);
         }
     }
+    return out.str();
 }
 
-bool wanted_stream( rs2_stream stream )
+std::string scheduler_name(int policy)
 {
-    return stream == RS2_STREAM_COLOR
-        || stream == RS2_STREAM_DEPTH
-        || stream == RS2_STREAM_INFRARED
-        || stream == RS2_STREAM_GYRO
-        || stream == RS2_STREAM_ACCEL;
+    switch (policy)
+    {
+    case SCHED_OTHER: return "SCHED_OTHER";
+    case SCHED_RR: return "SCHED_RR";
+    case SCHED_FIFO: return "SCHED_FIFO";
+#ifdef SCHED_BATCH
+    case SCHED_BATCH: return "SCHED_BATCH";
+#endif
+#ifdef SCHED_IDLE
+    case SCHED_IDLE: return "SCHED_IDLE";
+#endif
+#ifdef SCHED_DEADLINE
+    case SCHED_DEADLINE: return "SCHED_DEADLINE";
+#endif
+    default: return "UNKNOWN(" + std::to_string(policy) + ")";
+    }
 }
 
-int video_preference_score( const rs2::video_stream_profile & video )
+void print_scheduler()
 {
-    const auto stream = video.stream_type();
-    const auto format = video.format();
-    int score = 0;
+    const int policy = sched_getscheduler(0);
+    sched_param param{};
+    if (policy < 0 || sched_getparam(0, &param) != 0)
+        throw std::runtime_error("Unable to read the effective scheduling policy");
 
-    if( video.fps() == 30 )
-        score += 500;
-    else if( video.fps() == 15 )
-        score += 250;
-    else
-        score -= std::abs( video.fps() - 30 );
+    std::cout << "RS_SCHEDULER {\"policy\":\"" << scheduler_name(policy)
+              << "\",\"policy_id\":" << policy
+              << ",\"priority\":" << param.sched_priority << "}\n";
+}
 
-    if( stream == RS2_STREAM_DEPTH )
-    {
-        if( format == RS2_FORMAT_Z16 )
-            score += 2000;
-        if( video.width() == 848 && video.height() == 480 )
-            score += 1000;
-        else if( video.width() == 640 && video.height() == 480 )
-            score += 700;
-    }
-    else if( stream == RS2_STREAM_INFRARED )
-    {
-        if( format == RS2_FORMAT_Y8 )
-            score += 2000;
-        if( video.width() == 848 && video.height() == 480 )
-            score += 1000;
-        else if( video.width() == 640 && video.height() == 480 )
-            score += 700;
-    }
-    else if( stream == RS2_STREAM_COLOR )
-    {
-        if( format == RS2_FORMAT_RGB8 )
-            score += 2000;
-        else if( format == RS2_FORMAT_BGR8 )
-            score += 1900;
-        else if( format == RS2_FORMAT_YUYV )
-            score += 1700;
-        if( video.width() == 640 && video.height() == 480 )
-            score += 1000;
-        else if( video.width() == 1280 && video.height() == 720 )
-            score += 800;
-    }
+std::string info_or_unknown(const rs2::device &dev, rs2_camera_info info)
+{
+    return dev.supports(info) ? dev.get_info(info) : "unknown";
+}
 
+rs2::device select_device(rs2::context &ctx, const std::string &serial)
+{
+    const auto devices = ctx.query_devices();
+    if (devices.size() == 0)
+        throw std::runtime_error("No RealSense devices found");
+
+    for (const auto &dev : devices)
+    {
+        if (serial.empty()
+            || (dev.supports(RS2_CAMERA_INFO_SERIAL_NUMBER)
+                && serial == dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER)))
+            return dev;
+    }
+    throw std::runtime_error("Requested serial number was not found: " + serial);
+}
+
+void hardware_reset_and_wait(const std::string &requested_serial, int timeout_ms)
+{
+    rs2::context ctx;
+    auto dev = select_device(ctx, requested_serial);
+    const auto serial = info_or_unknown(dev, RS2_CAMERA_INFO_SERIAL_NUMBER);
+    const auto physical_port = info_or_unknown(dev, RS2_CAMERA_INFO_PHYSICAL_PORT);
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool removed = false;
+    bool added = false;
+
+    ctx.set_devices_changed_callback([&](rs2::event_information info) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (info.was_removed(dev))
+            removed = true;
+        for (const auto &candidate : info.get_new_devices())
+        {
+            try
+            {
+                if (candidate.supports(RS2_CAMERA_INFO_SERIAL_NUMBER)
+                    && serial == candidate.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER))
+                    added = true;
+            }
+            catch (const rs2::error &)
+            {
+            }
+        }
+        changed.notify_all();
+    });
+
+    std::cout << "RS_HARDWARE_RESET {\"state\":\"requested\",\"serial\":\""
+              << json_escape(serial) << "\",\"physical_port\":\""
+              << json_escape(physical_port) << "\"}\n" << std::flush;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    dev.hardware_reset();
+
+    const auto deadline = clock_type::now() + std::chrono::milliseconds(timeout_ms);
+    std::unique_lock<std::mutex> lock(mutex);
+    changed.wait_until(lock, deadline, [&] { return removed || added; });
+    if (!removed && !added)
+        throw std::runtime_error("No disconnect/reconnect event after camera hardware reset");
+    if (!added)
+        changed.wait_until(lock, deadline, [&] { return added; });
+    if (!added)
+        throw std::runtime_error("Camera did not reconnect after hardware reset");
+    lock.unlock();
+    ctx.set_devices_changed_callback([](rs2::event_information) {});
+    std::cout << "RS_HARDWARE_RESET {\"state\":\"complete\",\"serial\":\""
+              << json_escape(serial) << "\",\"removed_observed\":"
+              << (removed ? "true" : "false") << "}\n";
+}
+
+std::string profile_to_string(const rs2::stream_profile &profile)
+{
+    std::ostringstream out;
+    out << profile.stream_name() << " idx=" << profile.stream_index()
+        << " fmt=" << rs2_format_to_string(profile.format())
+        << " fps=" << profile.fps();
+    if (auto video = profile.as<rs2::video_stream_profile>())
+        out << " " << video.width() << "x" << video.height();
+    return out.str();
+}
+
+bool wanted_stream(rs2_stream stream)
+{
+    return stream == RS2_STREAM_COLOR || stream == RS2_STREAM_DEPTH || stream == RS2_STREAM_INFRARED
+        || stream == RS2_STREAM_GYRO || stream == RS2_STREAM_ACCEL;
+}
+
+int profile_score(const rs2::stream_profile &profile)
+{
+    int score = profile.is_default() ? 5000 : 0;
+    if (auto video = profile.as<rs2::video_stream_profile>())
+    {
+        score += video.fps() == 30 ? 1000 : -std::abs(video.fps() - 30);
+        if (video.stream_type() == RS2_STREAM_DEPTH && video.format() == RS2_FORMAT_Z16)
+            score += 3000;
+        if (video.stream_type() == RS2_STREAM_INFRARED && video.format() == RS2_FORMAT_Y8)
+            score += 3000;
+        if (video.stream_type() == RS2_STREAM_COLOR)
+        {
+            if (video.format() == RS2_FORMAT_RGB8 || video.format() == RS2_FORMAT_BGR8)
+                score += 3000;
+            if (video.width() == 640 && video.height() == 480)
+                score += 1000;
+        }
+        else if (video.width() == 848 && video.height() == 480)
+            score += 1000;
+    }
+    else if (profile.format() == RS2_FORMAT_MOTION_XYZ32F)
+    {
+        score += 3000;
+    }
     return score;
 }
 
-int profile_preference_score( const rs2::stream_profile & profile )
+std::vector<selected_profile> choose_profiles(const rs2::device &dev, bool include_all_ir)
 {
-    int score = 0;
-    if( profile.is_default() )
-        score += profile.stream_type() == RS2_STREAM_INFRARED ? 200 : 5000;
-
-    if( auto video = profile.as< rs2::video_stream_profile >() )
-        score += video_preference_score( video );
-    else
+    std::map<stream_key, std::vector<rs2::stream_profile>> grouped;
+    for (const auto &sensor : dev.query_sensors())
     {
-        if( profile.stream_type() == RS2_STREAM_GYRO && profile.fps() == 200 )
-            score += 1000;
-        if( profile.stream_type() == RS2_STREAM_ACCEL && ( profile.fps() == 100 || profile.fps() == 63 ) )
-            score += 1000;
-        if( profile.format() == RS2_FORMAT_MOTION_XYZ32F )
-            score += 500;
-    }
-
-    return score;
-}
-
-std::vector< selected_profile > choose_profiles( const rs2::device & dev, bool include_all_ir )
-{
-    std::map< stream_key, std::vector< rs2::stream_profile > > grouped;
-    for( const auto & sensor : dev.query_sensors() )
-    {
-        for( const auto & profile : sensor.get_stream_profiles() )
+        for (const auto &profile : sensor.get_stream_profiles())
         {
-            if( wanted_stream( profile.stream_type() ) )
-                grouped[{ profile.stream_type(), profile.stream_index() }].push_back( profile );
+            if (wanted_stream(profile.stream_type()))
+                grouped[{profile.stream_type(), profile.stream_index()}].push_back(profile);
         }
     }
 
-    std::vector< selected_profile > selected;
-    bool selected_ir = false;
-
-    for( auto & entry : grouped )
+    std::vector<selected_profile> result;
+    bool have_ir = false;
+    for (auto &entry : grouped)
     {
-        const auto key = entry.first;
-        auto & profiles = entry.second;
-
-        if( key.stream == RS2_STREAM_INFRARED && ! include_all_ir && selected_ir )
+        if (entry.first.stream == RS2_STREAM_INFRARED && have_ir && !include_all_ir)
             continue;
-
-        auto best = std::max_element( profiles.begin(), profiles.end(), []( const rs2::stream_profile & a, const rs2::stream_profile & b ) {
-            return profile_preference_score( a ) < profile_preference_score( b );
-        } );
-        if( best == profiles.end() )
-            continue;
-
-        if( key.stream == RS2_STREAM_INFRARED )
-            selected_ir = true;
-
-        std::ostringstream reason;
-        reason << "score=" << profile_preference_score( *best );
-        selected.push_back( { *best, reason.str() } );
+        auto best = std::max_element(entry.second.begin(), entry.second.end(), [](const auto &a, const auto &b) {
+            return profile_score(a) < profile_score(b);
+        });
+        if (best != entry.second.end())
+        {
+            result.push_back({*best, profile_score(*best)});
+            if (entry.first.stream == RS2_STREAM_INFRARED)
+                have_ir = true;
+        }
     }
-
-    std::sort( selected.begin(), selected.end(), []( const selected_profile & a, const selected_profile & b ) {
-        return stream_key{ a.profile.stream_type(), a.profile.stream_index() }
-            < stream_key{ b.profile.stream_type(), b.profile.stream_index() };
-    } );
-
-    return selected;
+    std::sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
+        return stream_key{a.profile.stream_type(), a.profile.stream_index()}
+            < stream_key{b.profile.stream_type(), b.profile.stream_index()};
+    });
+    return result;
 }
 
-void enable_profile( rs2::config & cfg, const rs2::stream_profile & profile )
+void enable_profile(rs2::config &cfg, const rs2::stream_profile &profile)
 {
-    if( auto video = profile.as< rs2::video_stream_profile >() )
+    if (auto video = profile.as<rs2::video_stream_profile>())
     {
-        cfg.enable_stream( profile.stream_type(),
-                           profile.stream_index(),
-                           video.width(),
-                           video.height(),
-                           profile.format(),
-                           profile.fps() );
+        cfg.enable_stream(profile.stream_type(),
+                          profile.stream_index(),
+                          video.width(),
+                          video.height(),
+                          profile.format(),
+                          profile.fps());
     }
     else
     {
-        cfg.enable_stream( profile.stream_type(),
-                           profile.stream_index(),
-                           profile.format(),
-                           profile.fps() );
+        cfg.enable_stream(profile.stream_type(), profile.stream_index(), profile.format(), profile.fps());
     }
 }
 
-void print_selected_profiles( const std::vector< selected_profile > & selected )
-{
-    std::cout << "Selected stream requests:\n";
-    for( const auto & item : selected )
-        std::cout << "  " << profile_to_string( item.profile ) << " (" << item.reason << ")\n";
-}
-
-rs2::pipeline_profile start_pipeline( rs2::pipeline & pipe,
-                                      const options & opts,
-                                      const std::vector< selected_profile > & selected )
+rs2::pipeline_profile start_pipeline(rs2::pipeline &pipe,
+                                     const options &opts,
+                                     const std::vector<selected_profile> &selected)
 {
     rs2::config cfg;
-    if( ! opts.serial.empty() )
-        cfg.enable_device( opts.serial );
+    if (!opts.serial.empty())
+        cfg.enable_device(opts.serial);
 
-    if( opts.enable_all_streams )
+    if (opts.enable_all_streams)
     {
-        std::cout << "Using librealsense config.enable_all_streams().\n";
         cfg.enable_all_streams();
     }
     else
     {
-        if( selected.empty() )
-            throw std::runtime_error( "No RGB/depth/infrared/motion profiles were found on the selected device" );
-        for( const auto & item : selected )
-            enable_profile( cfg, item.profile );
+        if (selected.empty())
+            throw std::runtime_error("No RGB/depth/infrared/motion stream profiles were found");
+        for (const auto &item : selected)
+            enable_profile(cfg, item.profile);
     }
-
-    return pipe.start( cfg );
+    return pipe.start(cfg);
 }
 
-void print_active_profiles( const rs2::pipeline_profile & profile )
+void print_inventory(const rs2::device &dev, const std::vector<selected_profile> &selected)
 {
-    auto streams = profile.get_streams();
-    std::sort( streams.begin(), streams.end(), []( const rs2::stream_profile & a, const rs2::stream_profile & b ) {
-        return stream_key{ a.stream_type(), a.stream_index() } < stream_key{ b.stream_type(), b.stream_index() };
-    } );
+    std::cout << "RS_DEVICE {\"name\":\""
+              << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_NAME))
+              << "\",\"serial\":\""
+              << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_SERIAL_NUMBER))
+              << "\",\"physical_port\":\""
+              << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_PHYSICAL_PORT))
+              << "\",\"product_id\":\""
+              << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_PRODUCT_ID))
+              << "\"}\n";
+    std::cout << "Device: " << info_or_unknown(dev, RS2_CAMERA_INFO_NAME)
+              << " serial=" << info_or_unknown(dev, RS2_CAMERA_INFO_SERIAL_NUMBER)
+              << " firmware=" << info_or_unknown(dev, RS2_CAMERA_INFO_FIRMWARE_VERSION)
+              << " usb=" << info_or_unknown(dev, RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR) << '\n';
+    std::cout << "Selected stream requests (" << selected.size() << "):\n";
+    for (const auto &item : selected)
+        std::cout << "  " << profile_to_string(item.profile) << " score=" << item.score << '\n';
+}
 
+void print_active_profiles(const rs2::pipeline_profile &profile)
+{
     std::cout << "Active streams:\n";
-    for( const auto & stream : streams )
-    {
-        std::cout << "  " << profile_to_string( stream ) << '\n';
-        if( auto video = stream.as< rs2::video_stream_profile >() )
-        {
-            try
-            {
-                const auto intr = video.get_intrinsics();
-                std::cout << "      intrinsics: fx=" << intr.fx << " fy=" << intr.fy
-                          << " ppx=" << intr.ppx << " ppy=" << intr.ppy
-                          << " model=" << intr.model << '\n';
-            }
-            catch( const std::exception & e )
-            {
-                std::cout << "      intrinsics unavailable: " << e.what() << '\n';
-            }
-        }
-    }
-
-    for( size_t i = 0; i < streams.size(); ++i )
-    {
-        for( size_t j = i + 1; j < streams.size(); ++j )
-        {
-            try
-            {
-                const auto ex = streams[i].get_extrinsics_to( streams[j] );
-                std::cout << "  extrinsics " << streams[i].stream_name() << " -> " << streams[j].stream_name()
-                          << ": t=[" << ex.translation[0] << ", " << ex.translation[1] << ", " << ex.translation[2] << "]\n";
-            }
-            catch( const std::exception & )
-            {
-            }
-        }
-    }
+    for (const auto &stream : profile.get_streams())
+        std::cout << "  " << profile_to_string(stream) << '\n';
 }
 
-std::string sample_key( const rs2::stream_profile & profile )
-{
-    std::ostringstream out;
-    out << rs2_stream_to_string( profile.stream_type() ) << "#" << profile.stream_index();
-    return out.str();
-}
-
-void update_sample( std::map< std::string, stream_sample > & samples, const rs2::frame & frame )
-{
-    const auto profile = frame.get_profile();
-    auto & sample = samples[sample_key( profile )];
-    sample.count += 1;
-    sample.frame_number = frame.get_frame_number();
-    sample.timestamp_ms = frame.get_timestamp();
-    sample.format = profile.format();
-    sample.bytes = frame.get_data_size();
-
-    if( auto video = frame.as< rs2::video_frame >() )
-    {
-        sample.width = video.get_width();
-        sample.height = video.get_height();
-        sample.stride = video.get_stride_in_bytes();
-    }
-
-    if( auto depth = frame.as< rs2::depth_frame >() )
-    {
-        sample.has_depth = true;
-        sample.center_depth_m = depth.get_distance( depth.get_width() / 2, depth.get_height() / 2 );
-    }
-
-    if( auto motion = frame.as< rs2::motion_frame >() )
-    {
-        sample.has_motion = true;
-        sample.motion = motion.get_motion_data();
-    }
-}
-
-void print_samples( const std::map< std::string, stream_sample > & samples )
-{
-    std::cout << "Samples:\n";
-    for( const auto & entry : samples )
-    {
-        const auto & s = entry.second;
-        std::cout << "  " << std::setw( 12 ) << entry.first
-                  << " count=" << s.count
-                  << " frame=" << s.frame_number
-                  << " ts_ms=" << std::fixed << std::setprecision( 3 ) << s.timestamp_ms
-                  << " fmt=" << rs2_format_to_string( s.format );
-        if( s.width > 0 )
-            std::cout << " " << s.width << "x" << s.height << " stride=" << s.stride << " bytes=" << s.bytes;
-        if( s.has_depth )
-            std::cout << " center_depth_m=" << std::setprecision( 4 ) << s.center_depth_m;
-        if( s.has_motion )
-            std::cout << " xyz=[" << s.motion.x << ", " << s.motion.y << ", " << s.motion.z << "]";
-        std::cout << '\n';
-    }
-}
-
-rs2::device select_device( rs2::context & ctx, const std::string & serial )
-{
-    auto devices = ctx.query_devices();
-    if( devices.size() == 0 )
-        throw std::runtime_error( "No RealSense devices found" );
-
-    for( const auto & dev : devices )
-    {
-        if( serial.empty() || ( dev.supports( RS2_CAMERA_INFO_SERIAL_NUMBER ) && serial == dev.get_info( RS2_CAMERA_INFO_SERIAL_NUMBER ) ) )
-            return dev;
-    }
-
-    throw std::runtime_error( "Requested serial number was not found: " + serial );
-}
-
-options parse_args( int argc, char ** argv )
+options parse_args(int argc, char **argv)
 {
     options opts;
-    for( int i = 1; i < argc; ++i )
+    for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
-        if( arg == "--serial" && i + 1 < argc )
-            opts.serial = argv[++i];
-        else if( arg == "--frames" && i + 1 < argc )
-            opts.frames = std::stoi( argv[++i] );
-        else if( arg == "--enable-all" )
+        auto value = [&]() -> std::string {
+            if (i + 1 >= argc)
+                throw std::runtime_error("Missing value for " + arg);
+            return argv[++i];
+        };
+
+        if (arg == "--serial")
+            opts.serial = value();
+        else if (arg == "--frames")
+            opts.frames = std::stoi(value());
+        else if (arg == "--cycles")
+            opts.cycles = std::stoi(value());
+        else if (arg == "--frame-timeout-ms")
+            opts.frame_timeout_ms = std::stoi(value());
+        else if (arg == "--join-timeout-ms")
+            opts.join_timeout_ms = std::stoi(value());
+        else if (arg == "--cycle-delay-ms")
+            opts.cycle_delay_ms = std::stoi(value());
+        else if (arg == "--reset-timeout-ms")
+            opts.reset_timeout_ms = std::stoi(value());
+        else if (arg == "--hardware-reset")
+            opts.hardware_reset = true;
+        else if (arg == "--enable-all")
             opts.enable_all_streams = true;
-        else if( arg == "--single-ir" )
+        else if (arg == "--single-ir")
             opts.try_all_ir = false;
-        else if( arg == "--list-only" )
+        else if (arg == "--strict-streams")
+            opts.strict_streams = true;
+        else if (arg == "--list-only")
             opts.list_only = true;
-        else if( arg == "--help" || arg == "-h" )
+        else if (arg == "--help" || arg == "-h")
         {
-            std::cout << "Usage: " << argv[0] << " [--serial SERIAL] [--frames N] [--enable-all] [--single-ir] [--list-only]\n";
-            std::exit( 0 );
+            std::cout
+                << "Usage: " << argv[0] << " [options]\n"
+                << "  --serial SERIAL          select one camera\n"
+                << "  --frames N               framesets per cycle (0 means run until signal)\n"
+                << "  --cycles N               fully construct/start/stop/destroy N times\n"
+                << "  --frame-timeout-ms N     timeout for each frame wait (default 1500)\n"
+                << "  --join-timeout-ms N      wait for all cycle-created threads (default 10)\n"
+                << "  --cycle-delay-ms N       delay after joining and before next cycle\n"
+                << "  --hardware-reset         send D400 firmware reset and wait for reconnect\n"
+                << "  --reset-timeout-ms N     hardware-reset reconnect timeout (default 5000)\n"
+                << "  --enable-all             use config.enable_all_streams()\n"
+                << "  --single-ir              request only the first infrared stream\n"
+                << "  --strict-streams         fail instead of retrying with one infrared stream\n"
+                << "  --list-only              print selected profiles without streaming\n";
+            std::exit(0);
         }
         else
-            throw std::runtime_error( "Unknown or incomplete argument: " + arg );
+            throw std::runtime_error("Unknown argument: " + arg);
     }
+
+    if (opts.cycles < 1 || opts.frames < 0 || opts.frame_timeout_ms <= 0
+        || opts.join_timeout_ms < 0 || opts.cycle_delay_ms < 0
+        || opts.reset_timeout_ms <= 0)
+        throw std::runtime_error(
+            "cycles, frame timeout, and reset timeout must be positive; "
+            "frames and other timeouts must be non-negative");
+    if (opts.cycles > 1 && opts.frames == 0)
+        throw std::runtime_error("--cycles greater than one requires a finite --frames value");
     return opts;
 }
 }  // namespace
 
-int main( int argc, char ** argv )
+int main(int argc, char **argv)
 try
 {
-    pthread_setname_np( pthread_self(), "d435-probe" );
-    std::signal( SIGINT, on_signal );
-    std::signal( SIGTERM, on_signal );
+    pthread_setname_np(pthread_self(), "d435-probe");
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
 
-    const auto opts = parse_args( argc, argv );
-
-    const auto threads_at_start = read_threads();
-    print_thread_model_notes();
-
-    rs2::context ctx;
-    const auto threads_after_context = read_threads();
-    print_thread_delta( "after rs2::context", threads_at_start, threads_after_context );
-
-    auto dev = select_device( ctx, opts.serial );
-    print_device_inventory( dev );
-    const auto threads_after_inventory = read_threads();
-    print_thread_delta( "after device inventory", threads_after_context, threads_after_inventory );
-    if( opts.list_only )
+    const auto opts = parse_args(argc, argv);
+    if (opts.hardware_reset)
+    {
+        hardware_reset_and_wait(opts.serial, opts.reset_timeout_ms);
         return 0;
-
-    auto selected = choose_profiles( dev, opts.try_all_ir );
-    if( ! opts.enable_all_streams )
-        print_selected_profiles( selected );
-
-    const auto threads_before_pipeline_object = read_threads();
-    auto pipe = std::make_unique< rs2::pipeline >( ctx );
-    const auto threads_after_pipeline_object = read_threads();
-    print_thread_delta( "after pipeline object construction", threads_before_pipeline_object, threads_after_pipeline_object );
-
-    rs2::pipeline_profile active_profile;
-    const auto threads_before_start = read_threads();
-
-    try
-    {
-        active_profile = start_pipeline( *pipe, opts, selected );
     }
-    catch( const std::exception & e )
+    const auto baseline_threads = read_threads();
+    const auto baseline_ids = thread_ids(baseline_threads);
+
+    rs_trace_phase_marker("process_start");
+    print_scheduler();
+
+    int completed_cycles = 0;
+    for (int cycle = 1; cycle <= opts.cycles && keep_running; ++cycle)
     {
-        const auto ir_count = std::count_if( selected.begin(), selected.end(), []( const selected_profile & item ) {
-            return item.profile.stream_type() == RS2_STREAM_INFRARED;
-        } );
-        if( opts.enable_all_streams || ir_count <= 1 )
-            throw;
+        mark_cycle(cycle, "begin");
+        const auto cycle_begin = clock_type::now();
+        double start_call_ms = 0.0;
+        double first_frame_ms = 0.0;
+        double first_frame_wait_ms = 0.0;
+        double stop_call_ms = 0.0;
+        int framesets = 0;
+        size_t threads_after_start = 0;
 
-        std::cerr << "Start with multiple IR streams failed: " << e.what() << "\nRetrying with one IR stream.\n";
-        selected = choose_profiles( dev, false );
-        print_selected_profiles( selected );
-        pipe = std::make_unique< rs2::pipeline >( ctx );
-        active_profile = start_pipeline( *pipe, opts, selected );
-    }
+        mark_cycle(cycle, "before_context");
+        auto ctx = std::make_unique<rs2::context>();
+        mark_cycle(cycle, "after_context");
 
-    const auto threads_after_start = read_threads();
-    print_thread_delta( "after pipeline.start", threads_before_start, threads_after_start );
-    print_active_profiles( active_profile );
-
-    std::cout << "\nReading frames. Press Ctrl-C to stop";
-    if( opts.frames > 0 )
-        std::cout << " or wait for " << opts.frames << " framesets";
-    std::cout << ".\n";
-
-    std::map< std::string, stream_sample > samples;
-    int framesets = 0;
-    auto next_report = std::chrono::steady_clock::now();
-
-    while( keep_running && ( opts.frames <= 0 || framesets < opts.frames ) )
-    {
-        auto frames = pipe->wait_for_frames();
-        ++framesets;
-
-        for( const auto & frame : frames )
-            update_sample( samples, frame );
-
-        const auto now = std::chrono::steady_clock::now();
-        if( now >= next_report )
+        auto dev = select_device(*ctx, opts.serial);
+        auto selected = choose_profiles(dev, opts.try_all_ir);
+        if (cycle == 1)
+            print_inventory(dev, selected);
+        if (opts.list_only)
         {
-            std::cout << "\nframesets=" << framesets << '\n';
-            print_samples( samples );
-            next_report = now + std::chrono::seconds( 1 );
+            rs_trace_phase_marker("process_exit");
+            return 0;
         }
+
+        mark_cycle(cycle, "before_pipeline_construction");
+        auto pipe = std::make_unique<rs2::pipeline>(*ctx);
+        mark_cycle(cycle, "after_pipeline_construction");
+
+        mark_cycle(cycle, "before_pipeline_start");
+        const auto start_begin = clock_type::now();
+        rs2::pipeline_profile active;
+        try
+        {
+            active = start_pipeline(*pipe, opts, selected);
+        }
+        catch (const std::exception &error)
+        {
+            const auto ir_count = std::count_if(selected.begin(), selected.end(), [](const auto &item) {
+                return item.profile.stream_type() == RS2_STREAM_INFRARED;
+            });
+            if (opts.strict_streams || opts.enable_all_streams || ir_count <= 1)
+                throw;
+
+            std::cerr << "Multiple infrared streams failed: " << error.what()
+                      << "\nRetrying this cycle with one infrared stream.\n";
+            pipe.reset();
+            selected = choose_profiles(dev, false);
+            pipe = std::make_unique<rs2::pipeline>(*ctx);
+            active = start_pipeline(*pipe, opts, selected);
+        }
+        const auto start_end = clock_type::now();
+        start_call_ms = elapsed_ms(start_begin, start_end);
+        mark_cycle(cycle, "after_pipeline_start");
+
+        const auto after_start_threads = read_threads();
+        threads_after_start = after_start_threads.size() >= baseline_threads.size()
+            ? after_start_threads.size() - baseline_threads.size()
+            : 0;
+        if (cycle == 1)
+            print_active_profiles(active);
+
+        bool first_frame = true;
+        while (keep_running && (opts.frames == 0 || framesets < opts.frames))
+        {
+            const auto wait_begin = clock_type::now();
+            auto frames = pipe->wait_for_frames(
+                static_cast<unsigned int>(opts.frame_timeout_ms));
+            (void)frames;
+            ++framesets;
+            if (first_frame)
+            {
+                const auto first_frame_time = clock_type::now();
+                first_frame_ms = elapsed_ms(cycle_begin, first_frame_time);
+                first_frame_wait_ms = elapsed_ms(wait_begin, first_frame_time);
+                mark_cycle(cycle, "first_frame");
+                first_frame = false;
+            }
+        }
+        mark_cycle(cycle, "frames_complete");
+
+        mark_cycle(cycle, "before_pipeline_stop");
+        const auto stop_begin = clock_type::now();
+        pipe->stop();
+        stop_call_ms = elapsed_ms(stop_begin, clock_type::now());
+        mark_cycle(cycle, "after_pipeline_stop");
+
+        mark_cycle(cycle, "before_object_destruction");
+        pipe.reset();
+        active = rs2::pipeline_profile();
+        selected.clear();
+        dev = rs2::device();
+        ctx.reset();
+        mark_cycle(cycle, "after_object_destruction");
+
+        const auto join_begin = clock_type::now();
+        const auto remaining = wait_for_threads_to_join(baseline_ids, opts.join_timeout_ms);
+        const double join_wait_ms = elapsed_ms(join_begin, clock_type::now());
+        if (remaining.empty())
+            mark_cycle(cycle, "threads_joined");
+        else
+            mark_cycle(cycle, "thread_join_timeout");
+
+        const double cycle_ms = elapsed_ms(cycle_begin, clock_type::now());
+        const bool success = remaining.empty() && framesets == opts.frames;
+        std::cout << std::fixed << std::setprecision(3)
+                  << "RS_STARTUP_CYCLE {\"cycle\":" << cycle
+                  << ",\"success\":" << (success ? "true" : "false")
+                  << ",\"framesets\":" << framesets
+                  << ",\"start_call_ms\":" << start_call_ms
+                  << ",\"first_frame_ms\":" << first_frame_ms
+                  << ",\"first_frame_wait_ms\":" << first_frame_wait_ms
+                  << ",\"stop_call_ms\":" << stop_call_ms
+                  << ",\"join_wait_ms\":" << join_wait_ms
+                  << ",\"cycle_ms\":" << cycle_ms
+                  << ",\"threads_after_start\":" << threads_after_start
+                  << ",\"extra_threads_after_join\":" << remaining.size() << "}\n";
+
+        if (!remaining.empty())
+        {
+            for (const auto &thread : remaining)
+                std::cerr << "Thread did not join: tid=" << thread.tid << " name=" << thread.name << '\n';
+            throw std::runtime_error("Timed out waiting for all cycle-created threads to exit");
+        }
+        if (framesets != opts.frames)
+            break;
+
+        ++completed_cycles;
+        mark_cycle(cycle, "end");
+        if (opts.cycle_delay_ms > 0 && cycle < opts.cycles)
+            std::this_thread::sleep_for(std::chrono::milliseconds(opts.cycle_delay_ms));
     }
 
-    pipe->stop();
-    pipe.reset();
-    const auto threads_after_stop = read_threads();
-    print_thread_delta( "after pipeline.stop and destroy", threads_after_start, threads_after_stop );
-    return 0;
+    std::cout << "RS_STARTUP_RESULT {\"success\":"
+              << (completed_cycles == opts.cycles ? "true" : "false")
+              << ",\"completed_cycles\":" << completed_cycles
+              << ",\"requested_cycles\":" << opts.cycles << "}\n";
+    rs_trace_phase_marker("process_exit");
+    return completed_cycles == opts.cycles ? 0 : 3;
 }
-catch( const rs2::error & e )
+catch (const rs2::error &error)
 {
-    std::cerr << "RealSense error: " << e.what() << '\n';
+    rs_trace_phase_marker("process_error");
+    std::cout << "RS_STARTUP_ERROR {\"kind\":\"librealsense\",\"message\":\""
+              << json_escape(error.what()) << "\"}\n";
+    std::cerr << "RealSense error: " << error.what() << '\n';
     return 2;
 }
-catch( const std::exception & e )
+catch (const std::exception &error)
 {
-    std::cerr << "Error: " << e.what() << '\n';
+    rs_trace_phase_marker("process_error");
+    std::cout << "RS_STARTUP_ERROR {\"kind\":\"application\",\"message\":\""
+              << json_escape(error.what()) << "\"}\n";
+    std::cerr << "Error: " << error.what() << '\n';
     return 1;
 }

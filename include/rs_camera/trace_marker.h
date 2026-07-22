@@ -14,10 +14,11 @@
 extern "C" {
 #endif
 
-static inline uint64_t rs_trace_monotonic_raw_ns(void)
+static inline uint64_t rs_trace_boottime_ns(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    /* LiME uses bpf_ktime_get_boot_ns(); keep one clock domain. */
+    clock_gettime(CLOCK_BOOTTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
@@ -86,7 +87,7 @@ static inline void rs_trace_phase_marker(const char *name)
     int n = snprintf(line,
                      sizeof(line),
                      "{\"event\":\"phase_marker\",\"timestamp_ns\":%llu,\"tid\":%ld,\"name\":%s}\n",
-                     (unsigned long long)rs_trace_monotonic_raw_ns(),
+                     (unsigned long long)rs_trace_boottime_ns(),
                      rs_trace_gettid(),
                      escaped);
     if (n > 0)

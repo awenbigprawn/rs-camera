@@ -41,7 +41,8 @@ static int (*real_pthread_getname_np)(pthread_t, char *, size_t) = NULL;
 static uint64_t trace_now_ns(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    /* Match LiME/eBPF bpf_ktime_get_boot_ns(). */
+    clock_gettime(CLOCK_BOOTTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 

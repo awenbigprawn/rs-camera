@@ -1,4 +1,4 @@
-#include "trace_marker.h"
+#include "rs_camera/trace_marker.h"
 
 #include <librealsense2/rs.hpp>
 

@@ -67,3 +67,13 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Python virtual environments
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Generated thread traces
+/thread_trace.jsonl
