@@ -11,6 +11,7 @@ REPO_ROOT=$(CDPATH='' cd -P "$SCRIPT_DIR/.." && pwd)
 BUILD_PROJECT=0
 SYSTEM_ONLY=0
 SKIP_APT_UPDATE=0
+RSUSB_BACKEND=OFF
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-realsense-thread-trace}"
 VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
 
@@ -24,6 +25,7 @@ startup benchmark.
 Options:
   --build                 Build LiME, d435_sensor_probe, and the pthread tracer.
   --build-dir PATH        CMake build directory used by --build.
+  --rsusb-backend         Build vendored librealsense with its libusb backend.
   --system-only           Install system packages and Rust; skip project setup.
   --skip-apt-update       Do not run apt-get update.
   -h, --help              Show this help.
@@ -41,6 +43,82 @@ die() {
     exit 1
 }
 
+apt_sources_include_suite() {
+    suite=$1
+
+    for source_file in \
+        /etc/apt/sources.list \
+        /etc/apt/sources.list.d/*.list \
+        /etc/apt/sources.list.d/*.sources
+    do
+        [ -f "$source_file" ] || continue
+        if awk -v suite="$suite" '
+            /^[[:space:]]*#/ {
+                next
+            }
+            /^[[:space:]]*deb(-src)?[[:space:]]/ ||
+            /^[[:space:]]*Suites:[[:space:]]/ {
+                for (field = 1; field <= NF; field++) {
+                    if ($field == suite) {
+                        found = 1
+                    }
+                }
+            }
+            END {
+                exit(found ? 0 : 1)
+            }
+        ' "$source_file"
+        then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+ensure_ubuntu_updates_source() {
+    [ "${ID:-}" = "ubuntu" ] || return 0
+
+    ubuntu_codename=${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}
+    [ -n "$ubuntu_codename" ] ||
+        die "cannot determine the Ubuntu codename from /etc/os-release"
+    updates_suite="${ubuntu_codename}-updates"
+
+    if apt_sources_include_suite "$updates_suite"; then
+        return 0
+    fi
+
+    if [ "$SKIP_APT_UPDATE" -eq 1 ]; then
+        die "APT suite '$updates_suite' is missing; rerun without --skip-apt-update so it can be configured"
+    fi
+
+    case "$(dpkg --print-architecture)" in
+        amd64|i386)
+            ubuntu_archive_uri="http://archive.ubuntu.com/ubuntu/"
+            ;;
+        *)
+            ubuntu_archive_uri="http://ports.ubuntu.com/ubuntu-ports/"
+            ;;
+    esac
+
+    updates_source="/etc/apt/sources.list.d/rs-camera-${updates_suite}.sources"
+    updates_source_tmp=$(mktemp)
+    trap 'rm -f "$updates_source_tmp"' 0 HUP INT TERM
+    {
+        printf '%s\n' \
+            "Types: deb" \
+            "URIs: $ubuntu_archive_uri" \
+            "Suites: $updates_suite" \
+            "Components: main restricted universe multiverse" \
+            "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    } > "$updates_source_tmp"
+
+    echo "APT suite '$updates_suite' is missing; adding $updates_source"
+    sudo install -m 0644 "$updates_source_tmp" "$updates_source"
+    rm -f "$updates_source_tmp"
+    trap - 0 HUP INT TERM
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --build)
@@ -51,6 +129,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die "missing value for --build-dir"
             BUILD_DIR=$2
             shift 2
+            ;;
+        --rsusb-backend)
+            RSUSB_BACKEND=ON
+            shift
             ;;
         --system-only)
             SYSTEM_ONLY=1
@@ -90,7 +172,7 @@ case "${ID:-}" in
 esac
 
 command -v sudo >/dev/null 2>&1 || die "sudo is required"
-sudo -v
+ensure_ubuntu_updates_source
 
 APT_PACKAGES="
 build-essential
@@ -102,6 +184,7 @@ git
 libbpf-dev
 libelf-dev
 libssl-dev
+libudev-dev
 libusb-1.0-0-dev
 llvm
 ninja-build
@@ -130,6 +213,7 @@ sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_PACKAGES
 rustup set profile minimal
 rustup toolchain install stable
 rustup default stable
+rustup component add rustfmt --toolchain stable
 export PATH="$HOME/.cargo/bin:$PATH"
 
 command -v cargo >/dev/null 2>&1 || die "cargo is unavailable after rustup setup"
@@ -172,6 +256,7 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
     cmake \
         -S "$REPO_ROOT" \
         -B "$BUILD_DIR" \
+        -DFORCE_RSUSB_BACKEND="$RSUSB_BACKEND" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake \
         --build "$BUILD_DIR" \
