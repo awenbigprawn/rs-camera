@@ -17,6 +17,20 @@ on Intel RealSense cameras.
 
 ## Build
 
+On a fresh Ubuntu machine, install all system, Rust, Python, librealsense, and
+LiME build dependencies from the repository root:
+
+    ./scripts/install_dependencies_ubuntu.sh
+
+Add `--build` to initialize the submodules, prepare `.venv`, and also compile
+the native LiME binary, `d435_sensor_probe`, and the pthread tracer:
+
+    ./scripts/install_dependencies_ubuntu.sh --build
+
+Run the installer as a regular user. It invokes sudo only for apt and keeps the
+Rust toolchain and project files owned by that user. See `--help` for
+`--system-only`, `--skip-apt-update`, and build-directory overrides.
+
 By default the project builds against the vendored librealsense source:
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
