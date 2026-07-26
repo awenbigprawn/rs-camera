@@ -75,5 +75,11 @@ Testing/
 __pycache__/
 *.py[cod]
 
+# Local editor configuration
+/.vscode/
+
 # Generated thread traces
 /thread_trace.jsonl
+
+# Paper manuscript maintained as an independent Git repository
+/paperwriting/
