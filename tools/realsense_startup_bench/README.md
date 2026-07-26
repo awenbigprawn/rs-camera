@@ -208,6 +208,47 @@ successfully with no matching UVC errors is represented by zero errors; check
 `recovery_attempted`, `recovery_count`, `recovery_method`,
 `recovery_success`, and `recovery_error`.
 
+## Build a startup-thread timing model
+
+Use independent one-start processes and a longer streaming observation window
+for the startup model. Sixty framesets provide about two seconds of steady
+30-fps behavior without mixing later stop/restart cycles into the `t=0` model.
+The calibrated timeout and recovery values are written explicitly here so the
+measurement remains reproducible if defaults change:
+
+    sudo -v
+    .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
+      --policies other \
+      --cycle-delays-ms 0 \
+      --recover-on-failure full-reset \
+      --max-attempts-per-run 3 \
+      --recovery-settle-seconds 0 \
+      --recovery-wait-seconds 1.2 \
+      --recovery-reset-timeout-ms 5000 \
+      --frame-timeout-ms 1500 \
+      --join-timeout-ms 10 \
+      --cycles 1 \
+      --frames 60 \
+      --nb-runs 20 \
+      --serial 327122075717 \
+      --build-dir build-realsense-thread-trace \
+      --results-dir tools/realsense_startup_bench/results/startup_model_other_20runs
+
+Then point the offline model builder at the generated timestamped benchmark
+directory:
+
+    .venv/bin/python tools/realsense_startup_bench/build_startup_model.py \
+      --campaign-dir tools/realsense_startup_bench/results/startup_model_other_20runs/benchmark_HOST_realsense_startup_TIMESTAMP \
+      --policy other \
+      --cycle 1 \
+      --output-dir tools/realsense_startup_bench/results/startup_model_other_20runs/model
+
+The builder aligns the modal thread shape by creation order and creation phase,
+identifies stable periodic work from LiME scheduler intervals, and preserves
+initial failure statistics separately from successful retries. It writes raw
+samples, a p05/p50/p95 per-thread table, JSON metadata, a Markdown report, and
+an SVG horizontal running/ready/sleeping timeline.
+
 Test the offline merger without a camera or root privileges:
 
     python3 -m unittest discover \
