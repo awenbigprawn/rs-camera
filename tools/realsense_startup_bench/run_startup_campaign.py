@@ -59,6 +59,7 @@ class RealSenseStartupBench(Benchmark):
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
         max_attempts_per_run: int,
+        rsusb_backend: bool,
         use_sudo: bool,
     ) -> None:
         super().__init__(
@@ -82,6 +83,7 @@ class RealSenseStartupBench(Benchmark):
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
         self._use_sudo = use_sudo
+        self._rsusb_backend = rsusb_backend
         self._probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
 
@@ -119,6 +121,7 @@ class RealSenseStartupBench(Benchmark):
         subprocess.check_call([
             "cmake", "-S", str(REPO_ROOT), "-B", str(self._build_dir),
             "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+            f"-DFORCE_RSUSB_BACKEND={'ON' if self._rsusb_backend else 'OFF'}",
         ])
         subprocess.check_call([
             "cmake", "--build", str(self._build_dir),
@@ -657,6 +660,7 @@ class RealSenseStartupBench(Benchmark):
         effective = scheduler.get("policy", "")
         recovery = summary.get("recovery", {})
         return {
+            "librealsense_backend": "rsusb" if self._rsusb_backend else "v4l2",
             "policy_requested": requested,
             "priority_requested": 0 if run_variables["policy"] == "other" else self._priority,
             "policy_effective": effective,
@@ -775,6 +779,14 @@ def main() -> None:
     )
     parser.add_argument("--nb-runs", type=int, default=1)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
+    parser.add_argument(
+        "--rsusb-backend",
+        action="store_true",
+        help=(
+            "Build vendored librealsense with its libusb backend; use a separate "
+            "build directory and treat it as a distinct experiment."
+        ),
+    )
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument(
@@ -832,6 +844,7 @@ def main() -> None:
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,
         max_attempts_per_run=args.max_attempts_per_run,
+        rsusb_backend=args.rsusb_backend,
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(

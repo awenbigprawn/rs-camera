@@ -17,6 +17,37 @@ on Intel RealSense cameras.
 
 ## Build
 
+On a fresh Ubuntu machine, install all system, Rust, Python, librealsense, and
+LiME build dependencies from the repository root:
+
+    ./scripts/install_dependencies_ubuntu.sh
+
+Add `--build` to initialize the submodules, prepare `.venv`, and also compile
+the native LiME binary, `d435_sensor_probe`, and the pthread tracer:
+
+    ./scripts/install_dependencies_ubuntu.sh --build
+
+On a Raspberry Pi kernel without the RealSense UVC format patches, use a
+separate build directory and the RSUSB/libusb backend:
+
+    ./scripts/install_dependencies_ubuntu.sh --build \
+      --rsusb-backend \
+      --build-dir build-realsense-rsusb
+
+Before an RSUSB run, unbind only that camera's UVC interfaces from the kernel
+(the USB device name below is an example), and rebind them when finished:
+
+    sudo ./scripts/realsense_rsusb_uvc.sh unbind 3-1
+    # Run the RSUSB campaign.
+    sudo ./scripts/realsense_rsusb_uvc.sh bind 3-1
+
+Run the installer as a regular user. It invokes sudo only for apt and keeps the
+Rust toolchain and project files owned by that user. See `--help` for
+`--system-only`, `--skip-apt-update`, and build-directory overrides. On Ubuntu,
+it also restores the standard `<codename>-updates` APT pocket when it is
+missing, which prevents version conflicts between updated runtime libraries and
+their development packages.
+
 By default the project builds against the vendored librealsense source:
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -92,6 +123,16 @@ See tools/realsense_startup_bench/README.md. The standard paper-oriented run is:
       --cycles 10 \
       --frames 10 \
       --nb-runs 3
+
+Use the matching backend and build directory for a Raspberry Pi RSUSB run:
+
+    python3 tools/realsense_startup_bench/run_startup_campaign.py \
+      --rsusb-backend \
+      --build-dir build-realsense-rsusb \
+      --policies other \
+      --cycles 2 \
+      --frames 3 \
+      --nb-runs 1
 
 LiME/eBPF supplies the authoritative scheduler timestamps. The approved
 LD_PRELOAD helper adds pthread create/start/join/exit labels. Python merges both
