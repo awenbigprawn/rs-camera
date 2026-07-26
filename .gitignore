@@ -78,6 +78,9 @@ __pycache__/
 # Local editor configuration
 /.vscode/
 
+# Locally saved LiME documentation
+/lime-Command-line-Usage.html
+
 # Generated thread traces
 /thread_trace.jsonl
 
