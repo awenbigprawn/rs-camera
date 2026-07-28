@@ -86,3 +86,6 @@ __pycache__/
 
 # Paper manuscript maintained as an independent Git repository
 /paperwriting/
+
+# Local research notes and generated documentation
+/docu/
