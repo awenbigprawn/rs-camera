@@ -54,12 +54,16 @@ class RealSenseStartupBench(Benchmark):
         serial: str,
         frame_timeout_ms: int,
         join_timeout_ms: int,
+        process_timeout_seconds: int,
         recovery_reset_timeout_ms: int,
         recover_on_failure: str,
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
         max_attempts_per_run: int,
         rsusb_backend: bool,
+        rsusb_usb_device: str,
+        rsusb_prepare_timeout_seconds: float,
+        rsusb_unbind_settle_seconds: float,
         use_sudo: bool,
     ) -> None:
         super().__init__(
@@ -77,6 +81,7 @@ class RealSenseStartupBench(Benchmark):
         self._serial = serial
         self._frame_timeout_ms = frame_timeout_ms
         self._join_timeout_ms = join_timeout_ms
+        self._process_timeout_seconds = process_timeout_seconds
         self._recovery_reset_timeout_ms = recovery_reset_timeout_ms
         self._recover_on_failure = recover_on_failure
         self._recovery_wait_seconds = recovery_wait_seconds
@@ -84,6 +89,9 @@ class RealSenseStartupBench(Benchmark):
         self._max_attempts_per_run = max_attempts_per_run
         self._use_sudo = use_sudo
         self._rsusb_backend = rsusb_backend
+        self._rsusb_usb_device = rsusb_usb_device
+        self._rsusb_prepare_timeout_seconds = rsusb_prepare_timeout_seconds
+        self._rsusb_unbind_settle_seconds = rsusb_unbind_settle_seconds
         self._probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
 
@@ -117,6 +125,10 @@ class RealSenseStartupBench(Benchmark):
             )
         if self._recover_on_failure == "depth-prime" and shutil.which("v4l2-ctl") is None:
             raise RuntimeError("v4l2-ctl is required for --recover-on-failure depth-prime.")
+        if self._rsusb_usb_device:
+            helper = REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
+            if not helper.is_file():
+                raise RuntimeError(f"RSUSB UVC helper not found: {helper}")
 
         subprocess.check_call([
             "cmake", "-S", str(REPO_ROOT), "-B", str(self._build_dir),
@@ -161,6 +173,60 @@ class RealSenseStartupBench(Benchmark):
         if self._serial:
             probe += ["--serial", self._serial]
         return scheduled + probe
+
+    def _run_rsusb_uvc_helper(self, action: str) -> None:
+        if not self._rsusb_usb_device:
+            return
+
+        command = [
+            str(REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"),
+            action,
+            self._rsusb_usb_device,
+        ]
+        if self._use_sudo:
+            command = ["sudo", "--non-interactive", *command]
+        deadline = time.monotonic() + self._rsusb_prepare_timeout_seconds
+        failures: List[str] = []
+        while True:
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = (completed.stdout + completed.stderr).strip()
+            if completed.returncode == 0:
+                if output:
+                    print(f"[RSUSB] {output}")
+                break
+            failures.append(output or f"exit status {completed.returncode}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Failed to {action} UVC for {self._rsusb_usb_device}: "
+                    f"{failures[-1]}"
+                )
+            time.sleep(min(0.25, remaining))
+        if failures:
+            print(
+                f"[RSUSB] {action} succeeded after "
+                f"{len(failures)} transient failures"
+            )
+
+    def _prepare_rsusb_attempt(self) -> None:
+        self._run_rsusb_uvc_helper("unbind")
+        if self._rsusb_unbind_settle_seconds > 0:
+            time.sleep(self._rsusb_unbind_settle_seconds)
+
+    def restore_v4l2_binding(self) -> None:
+        if not self._rsusb_usb_device:
+            return
+        print(
+            f"[RSUSB] restoring UVC binding for {self._rsusb_usb_device} "
+            "after the campaign"
+        )
+        self._run_rsusb_uvc_helper("bind")
 
     def _read_kernel_log(self) -> tuple[str | None, str]:
         command = ["dmesg", "--raw"]
@@ -462,7 +528,7 @@ class RealSenseStartupBench(Benchmark):
         frame_timeout_seconds = (self._frame_timeout_ms + 999) // 1000
         join_timeout_seconds = (self._join_timeout_ms + 999) // 1000
         timeout = max(
-            30,
+            self._process_timeout_seconds,
             self._cycles * (join_timeout_seconds + frame_timeout_seconds + 5)
             + delay_budget_seconds,
         )
@@ -523,12 +589,16 @@ class RealSenseStartupBench(Benchmark):
             "frame_timeout_ms": self._frame_timeout_ms,
             "serial": self._serial,
             "join_timeout_ms": self._join_timeout_ms,
+            "process_timeout_seconds": self._process_timeout_seconds,
             "recovery_reset_timeout_ms": self._recovery_reset_timeout_ms,
             "cycle_delay_ms": cycle_delay_ms,
             "recover_on_failure": self._recover_on_failure,
             "recovery_wait_seconds": self._recovery_wait_seconds,
             "recovery_settle_seconds": self._recovery_settle_seconds,
             "max_attempts_per_run": self._max_attempts_per_run,
+            "rsusb_usb_device": self._rsusb_usb_device,
+            "rsusb_prepare_timeout_seconds": self._rsusb_prepare_timeout_seconds,
+            "rsusb_unbind_settle_seconds": self._rsusb_unbind_settle_seconds,
             "probe": str(self._probe),
             "lime": str(self._lime),
             "clock": "CLOCK_BOOTTIME",
@@ -544,6 +614,7 @@ class RealSenseStartupBench(Benchmark):
         final_summary: Dict[str, Any] | None = None
 
         for attempt in range(1, self._max_attempts_per_run + 1):
+            self._prepare_rsusb_attempt()
             attempt_dir = record_dir / f"attempt-{attempt}"
             output, summary = self._run_attempt(
                 policy=policy,
@@ -707,6 +778,24 @@ class RealSenseStartupBench(Benchmark):
         }
 
 
+def _run_campaign_with_cleanup(
+    campaign: CampaignCartesianProduct,
+    benchmark: RealSenseStartupBench,
+) -> None:
+    try:
+        campaign.run()
+    except BaseException:
+        try:
+            benchmark.restore_v4l2_binding()
+        except Exception as cleanup_error:
+            print(
+                f"[RSUSB] failed to restore V4L2 binding: {cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
+    benchmark.restore_v4l2_binding()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -730,6 +819,12 @@ def main() -> None:
         type=int,
         default=10,
         help="Wait for cycle-created threads to exit (default: 10 ms).",
+    )
+    parser.add_argument(
+        "--process-timeout-seconds",
+        type=int,
+        default=30,
+        help="Wall-clock timeout for one traced attempt (default: 30 seconds).",
     )
     parser.add_argument(
         "--recovery-reset-timeout-ms",
@@ -787,6 +882,26 @@ def main() -> None:
             "build directory and treat it as a distinct experiment."
         ),
     )
+    parser.add_argument(
+        "--rsusb-usb-device",
+        default="",
+        help=(
+            "USB sysfs device name (for example 3-1) whose UVC interfaces are "
+            "unbound before every RSUSB attempt."
+        ),
+    )
+    parser.add_argument(
+        "--rsusb-prepare-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="Maximum wait for a stable per-attempt UVC unbind (default: 10 seconds).",
+    )
+    parser.add_argument(
+        "--rsusb-unbind-settle-seconds",
+        type=float,
+        default=1.0,
+        help="Quiescence delay after per-attempt UVC unbind (default: 1 second).",
+    )
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument(
@@ -808,11 +923,12 @@ def main() -> None:
         args.cycles < 1
         or args.frames < 1
         or args.frame_timeout_ms < 1
+        or args.process_timeout_seconds < 1
         or args.recovery_reset_timeout_ms < 1
         or args.nb_runs < 1
     ):
         parser.error(
-            "--cycles, --frames, --frame-timeout-ms, "
+            "--cycles, --frames, --frame-timeout-ms, --process-timeout-seconds, "
             "--recovery-reset-timeout-ms, and --nb-runs must be positive"
         )
     if args.join_timeout_ms < 0:
@@ -827,6 +943,12 @@ def main() -> None:
         parser.error("--max-attempts-per-run must be positive")
     if args.max_attempts_per_run > 1 and args.recover_on_failure == "none":
         parser.error("multiple attempts require --recover-on-failure")
+    if args.rsusb_usb_device and not args.rsusb_backend:
+        parser.error("--rsusb-usb-device requires --rsusb-backend")
+    if args.rsusb_prepare_timeout_seconds <= 0:
+        parser.error("--rsusb-prepare-timeout-seconds must be positive")
+    if args.rsusb_unbind_settle_seconds < 0:
+        parser.error("--rsusb-unbind-settle-seconds must be non-negative")
 
     use_sudo = os.geteuid() != 0 and not args.no_sudo
     args.results_dir.mkdir(parents=True, exist_ok=True)
@@ -839,12 +961,16 @@ def main() -> None:
         serial=args.serial,
         frame_timeout_ms=args.frame_timeout_ms,
         join_timeout_ms=args.join_timeout_ms,
+        process_timeout_seconds=args.process_timeout_seconds,
         recovery_reset_timeout_ms=args.recovery_reset_timeout_ms,
         recover_on_failure=args.recover_on_failure,
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,
         max_attempts_per_run=args.max_attempts_per_run,
         rsusb_backend=args.rsusb_backend,
+        rsusb_usb_device=args.rsusb_usb_device,
+        rsusb_prepare_timeout_seconds=args.rsusb_prepare_timeout_seconds,
+        rsusb_unbind_settle_seconds=args.rsusb_unbind_settle_seconds,
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(
@@ -860,7 +986,7 @@ def main() -> None:
         benchmark_duration_seconds=None,
         results_dir=str(args.results_dir),
     )
-    campaign.run()
+    _run_campaign_with_cleanup(campaign, benchmark)
 
 
 if __name__ == "__main__":

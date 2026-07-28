@@ -234,6 +234,25 @@ measurement remains reproducible if defaults change:
       --build-dir build-realsense-thread-trace \
       --results-dir tools/realsense_startup_bench/results/startup_model_other_20runs
 
+For a Raspberry Pi RSUSB run, also select the RSUSB build, identify the camera's
+USB sysfs device, and allow extra wall-clock time for LiME to flush its trace:
+
+    --rsusb-backend \
+    --rsusb-usb-device 3-1 \
+    --rsusb-prepare-timeout-seconds 10 \
+    --rsusb-unbind-settle-seconds 1 \
+    --process-timeout-seconds 90 \
+    --build-dir build-realsense-rsusb
+
+The UVC helper unbinds the selected camera before every measured attempt and
+restores its V4L2 binding when the campaign completes or receives an ordinary
+interrupt. Its unbind retry and settle intervals occur before LiME starts the
+target, so they are not part of the application startup timeline. An
+uncatchable termination such as `SIGKILL` may still require a manual
+`scripts/realsense_rsusb_uvc.sh bind` operation. `--process-timeout-seconds`
+guards the complete tracer process; it does not replace the application's
+`--frame-timeout-ms`.
+
 Then point the offline model builder at the generated timestamped benchmark
 directory:
 

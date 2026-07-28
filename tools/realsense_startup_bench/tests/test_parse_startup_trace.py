@@ -10,7 +10,10 @@ TOOL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_DIR))
 
 from parse_startup_trace import parse_startup_trace
-from run_startup_campaign import RealSenseStartupBench
+from run_startup_campaign import (
+    RealSenseStartupBench,
+    _run_campaign_with_cleanup,
+)
 
 
 class RetryStartupRunTest(unittest.TestCase):
@@ -22,11 +25,15 @@ class RetryStartupRunTest(unittest.TestCase):
             self._serial = "test-serial"
             self._frame_timeout_ms = 1500
             self._join_timeout_ms = 10
+            self._process_timeout_seconds = 30
             self._recovery_reset_timeout_ms = 5000
             self._recover_on_failure = "depth-prime"
             self._recovery_wait_seconds = 10.0
             self._recovery_settle_seconds = 0.0
             self._max_attempts_per_run = 3
+            self._rsusb_usb_device = ""
+            self._rsusb_prepare_timeout_seconds = 10.0
+            self._rsusb_unbind_settle_seconds = 1.0
             self._probe = Path("/test/d435_sensor_probe")
             self._lime = Path("/test/lime-rtw")
             self.recovery_calls = 0
@@ -165,6 +172,71 @@ class RetryStartupRunTest(unittest.TestCase):
                 (root / "selected_attempt.txt").read_text(encoding="utf-8"),
                 "2\n",
             )
+
+
+class RsusbCleanupTest(unittest.TestCase):
+    def test_restore_v4l2_binding_invokes_bind_helper_with_sudo(self):
+        bench = object.__new__(RealSenseStartupBench)
+        bench._rsusb_usb_device = "3-1"
+        bench._rsusb_prepare_timeout_seconds = 10.0
+        bench._use_sudo = True
+        completed = mock.Mock(
+            returncode=0,
+            stdout=(
+                'RSUSB_UVC {"action":"bind","usb_device":"3-1",'
+                '"interfaces_changed":2}\n'
+            ),
+            stderr="",
+        )
+
+        with mock.patch(
+            "run_startup_campaign.subprocess.run", return_value=completed
+        ) as run_mock:
+            bench.restore_v4l2_binding()
+
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:2], ["sudo", "--non-interactive"])
+        self.assertEqual(command[-2:], ["bind", "3-1"])
+
+    def test_campaign_restores_v4l2_binding_after_success(self):
+        campaign = mock.Mock()
+        benchmark = mock.Mock()
+
+        _run_campaign_with_cleanup(campaign, benchmark)
+
+        campaign.run.assert_called_once_with()
+        benchmark.restore_v4l2_binding.assert_called_once_with()
+
+    def test_campaign_restores_v4l2_binding_before_reraising_failure(self):
+        campaign = mock.Mock()
+        campaign.run.side_effect = RuntimeError("campaign failed")
+        benchmark = mock.Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "campaign failed"):
+            _run_campaign_with_cleanup(campaign, benchmark)
+
+        benchmark.restore_v4l2_binding.assert_called_once_with()
+
+    def test_cleanup_failure_does_not_mask_campaign_failure(self):
+        campaign = mock.Mock()
+        campaign.run.side_effect = RuntimeError("campaign failed")
+        benchmark = mock.Mock()
+        benchmark.restore_v4l2_binding.side_effect = RuntimeError("bind failed")
+
+        with mock.patch("run_startup_campaign.print") as print_mock:
+            with self.assertRaisesRegex(RuntimeError, "campaign failed"):
+                _run_campaign_with_cleanup(campaign, benchmark)
+
+        print_mock.assert_called_once()
+        self.assertIn("bind failed", print_mock.call_args.args[0])
+
+    def test_cleanup_failure_after_success_is_reported_as_failure(self):
+        campaign = mock.Mock()
+        benchmark = mock.Mock()
+        benchmark.restore_v4l2_binding.side_effect = RuntimeError("bind failed")
+
+        with self.assertRaisesRegex(RuntimeError, "bind failed"):
+            _run_campaign_with_cleanup(campaign, benchmark)
 
 
 class ParseStartupTraceTest(unittest.TestCase):

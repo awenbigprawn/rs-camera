@@ -34,11 +34,19 @@ separate build directory and the RSUSB/libusb backend:
       --rsusb-backend \
       --build-dir build-realsense-rsusb
 
-Before an RSUSB run, unbind only that camera's UVC interfaces from the kernel
-(the USB device name below is an example), and rebind them when finished:
+For a Benchkit RSUSB campaign, pass the camera's USB sysfs name so UVC is
+unbound before every measured attempt (the name below is an example):
+
+    --rsusb-usb-device 3-1
+
+The campaign repeats the unbind because device recovery or re-enumeration can
+reattach `uvcvideo`. After a successful campaign or an ordinary interruption,
+it binds the interfaces back to `uvcvideo` so a later V4L2 run can use the
+camera. The standalone helper remains available for non-campaign probes and
+recovery after an uncatchable termination such as `SIGKILL`:
 
     sudo ./scripts/realsense_rsusb_uvc.sh unbind 3-1
-    # Run the RSUSB campaign.
+    # Run one RSUSB probe.
     sudo ./scripts/realsense_rsusb_uvc.sh bind 3-1
 
 Run the installer as a regular user. It invokes sudo only for apt and keeps the
@@ -128,6 +136,7 @@ Use the matching backend and build directory for a Raspberry Pi RSUSB run:
 
     python3 tools/realsense_startup_bench/run_startup_campaign.py \
       --rsusb-backend \
+      --rsusb-usb-device 3-1 \
       --build-dir build-realsense-rsusb \
       --policies other \
       --cycles 2 \
