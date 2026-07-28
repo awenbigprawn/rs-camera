@@ -34,6 +34,10 @@ class RetryStartupRunTest(unittest.TestCase):
             self._rsusb_usb_device = ""
             self._rsusb_prepare_timeout_seconds = 10.0
             self._rsusb_unbind_settle_seconds = 1.0
+            self._cpu_frequency_mhz = None
+            self._cpu_frequency_original_state = None
+            self._cpu_frequency_locked = False
+            self._cpu_frequency_restore_needed = False
             self._probe = Path("/test/d435_sensor_probe")
             self._lime = Path("/test/lime-rtw")
             self.recovery_calls = 0
@@ -206,6 +210,7 @@ class RsusbCleanupTest(unittest.TestCase):
 
         campaign.run.assert_called_once_with()
         benchmark.restore_v4l2_binding.assert_called_once_with()
+        benchmark.restore_cpu_frequency.assert_called_once_with()
 
     def test_campaign_restores_v4l2_binding_before_reraising_failure(self):
         campaign = mock.Mock()
@@ -216,6 +221,7 @@ class RsusbCleanupTest(unittest.TestCase):
             _run_campaign_with_cleanup(campaign, benchmark)
 
         benchmark.restore_v4l2_binding.assert_called_once_with()
+        benchmark.restore_cpu_frequency.assert_called_once_with()
 
     def test_cleanup_failure_does_not_mask_campaign_failure(self):
         campaign = mock.Mock()

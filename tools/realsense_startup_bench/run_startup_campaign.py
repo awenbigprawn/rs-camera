@@ -19,6 +19,9 @@ BENCHKIT_PATH = REPO_ROOT / "deps" / "benchkit"
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-startup"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
 DEFAULT_LIME = REPO_ROOT / "deps" / "lime-rtw" / "target" / "release" / "lime-rtw"
+CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
+CPU_FREQ_LOCK_SCRIPT = REPO_ROOT / "scripts" / "lock_cpu_freq.sh"
+CPU_FREQ_RESTORE_SCRIPT = REPO_ROOT / "scripts" / "restore_cpu_freq_default.sh"
 
 if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize the repository submodules first.")
@@ -64,6 +67,7 @@ class RealSenseStartupBench(Benchmark):
         rsusb_usb_device: str,
         rsusb_prepare_timeout_seconds: float,
         rsusb_unbind_settle_seconds: float,
+        cpu_frequency_mhz: int | None,
         use_sudo: bool,
     ) -> None:
         super().__init__(
@@ -92,6 +96,10 @@ class RealSenseStartupBench(Benchmark):
         self._rsusb_usb_device = rsusb_usb_device
         self._rsusb_prepare_timeout_seconds = rsusb_prepare_timeout_seconds
         self._rsusb_unbind_settle_seconds = rsusb_unbind_settle_seconds
+        self._cpu_frequency_mhz = cpu_frequency_mhz
+        self._cpu_frequency_original_state: Dict[str, Any] | None = None
+        self._cpu_frequency_locked = False
+        self._cpu_frequency_restore_needed = False
         self._probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
 
@@ -129,6 +137,10 @@ class RealSenseStartupBench(Benchmark):
             helper = REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
             if not helper.is_file():
                 raise RuntimeError(f"RSUSB UVC helper not found: {helper}")
+        if self._cpu_frequency_mhz is not None:
+            for helper in (CPU_FREQ_LOCK_SCRIPT, CPU_FREQ_RESTORE_SCRIPT):
+                if not helper.is_file():
+                    raise RuntimeError(f"CPU-frequency helper not found: {helper}")
 
         subprocess.check_call([
             "cmake", "-S", str(REPO_ROOT), "-B", str(self._build_dir),
@@ -227,6 +239,212 @@ class RealSenseStartupBench(Benchmark):
             "after the campaign"
         )
         self._run_rsusb_uvc_helper("bind")
+
+    @staticmethod
+    def _read_optional_text(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def _read_cpu_frequency_state(self) -> Dict[str, Any]:
+        policies: List[Dict[str, Any]] = []
+        for policy_dir in sorted(CPUFREQ_BASE.glob("policy*")):
+            if not policy_dir.is_dir():
+                continue
+            policies.append({
+                "name": policy_dir.name,
+                "path": str(policy_dir),
+                "driver": self._read_optional_text(policy_dir / "scaling_driver"),
+                "affected_cpus": self._read_optional_text(policy_dir / "affected_cpus"),
+                "governor": self._read_optional_text(policy_dir / "scaling_governor"),
+                "scaling_min_khz": self._read_optional_text(
+                    policy_dir / "scaling_min_freq"
+                ),
+                "scaling_max_khz": self._read_optional_text(
+                    policy_dir / "scaling_max_freq"
+                ),
+                "scaling_current_khz": self._read_optional_text(
+                    policy_dir / "scaling_cur_freq"
+                ),
+            })
+        return {
+            "policies": policies,
+            "boost": self._read_optional_text(CPUFREQ_BASE / "boost"),
+            "intel_pstate_no_turbo": self._read_optional_text(
+                Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
+            ),
+            "temperature_millic": self._read_optional_text(
+                Path("/sys/class/thermal/thermal_zone0/temp")
+            ),
+        }
+
+    def _privileged_command(self, command: List[str]) -> List[str]:
+        if not self._use_sudo:
+            return command
+        return ["sudo", "--non-interactive", *command]
+
+    def _verify_cpu_frequency(self, state: Dict[str, Any]) -> List[str]:
+        if self._cpu_frequency_mhz is None:
+            return []
+        target_khz = self._cpu_frequency_mhz * 1000
+        policies = state.get("policies", [])
+        if not policies:
+            return [f"no CPU-frequency policies found below {CPUFREQ_BASE}"]
+        errors: List[str] = []
+        for policy in policies:
+            name = policy.get("name", "unknown")
+            for field in (
+                "scaling_min_khz",
+                "scaling_max_khz",
+                "scaling_current_khz",
+            ):
+                if str(policy.get(field, "")) != str(target_khz):
+                    errors.append(
+                        f"{name} {field}={policy.get(field, '')}, "
+                        f"expected {target_khz}"
+                    )
+        return errors
+
+    def _lock_cpu_frequency_once(self, record_dir: Path) -> Dict[str, Any]:
+        if self._cpu_frequency_mhz is None:
+            return {"enabled": False, "policies": []}
+        if self._cpu_frequency_locked:
+            state = self._read_cpu_frequency_state()
+            errors = self._verify_cpu_frequency(state)
+            if errors:
+                raise RuntimeError(
+                    "CPU frequency changed during the campaign: " + " | ".join(errors)
+                )
+            state.update({
+                "enabled": True,
+                "requested_mhz": self._cpu_frequency_mhz,
+                "locked": True,
+            })
+            return state
+
+        self._cpu_frequency_original_state = self._read_cpu_frequency_state()
+        if not self._cpu_frequency_original_state["policies"]:
+            raise RuntimeError(f"No CPU-frequency policies found below {CPUFREQ_BASE}")
+
+        target_khz = self._cpu_frequency_mhz * 1000
+        command = self._privileged_command([
+            str(CPU_FREQ_LOCK_SCRIPT), str(target_khz),
+        ])
+        self._cpu_frequency_restore_needed = True
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = completed.stdout + completed.stderr
+        (record_dir / "cpu_frequency_lock.txt").write_text(output, encoding="utf-8")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"CPU-frequency lock failed with status {completed.returncode}; "
+                f"see {record_dir / 'cpu_frequency_lock.txt'}"
+            )
+
+        deadline = time.monotonic() + 1.0
+        while True:
+            state = self._read_cpu_frequency_state()
+            errors = self._verify_cpu_frequency(state)
+            if not errors or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        if errors:
+            raise RuntimeError(
+                "CPU-frequency lock verification failed: " + " | ".join(errors)
+            )
+
+        self._cpu_frequency_locked = True
+        state.update({
+            "enabled": True,
+            "requested_mhz": self._cpu_frequency_mhz,
+            "locked": True,
+        })
+        print(
+            f"[CPU-FREQ] locked {len(state['policies'])} policy/policies at "
+            f"{self._cpu_frequency_mhz} MHz before the first measured run"
+        )
+        return state
+
+    def _write_sysfs_value(self, path: Path, value: str) -> None:
+        completed = subprocess.run(
+            self._privileged_command(["tee", str(path)]),
+            input=value + "\n",
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise RuntimeError(f"Failed to restore {path}={value}: {detail}")
+
+    def restore_cpu_frequency(self) -> None:
+        if not self._cpu_frequency_restore_needed:
+            return
+        if self._cpu_frequency_original_state is None:
+            raise RuntimeError("Original CPU-frequency state was not captured")
+
+        print("[CPU-FREQ] restoring the pre-campaign CPU-frequency state")
+        completed = subprocess.run(
+            self._privileged_command([str(CPU_FREQ_RESTORE_SCRIPT)]),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or f"status {completed.returncode}"
+            raise RuntimeError(f"Default CPU-frequency restore failed: {detail}")
+
+        # The helper restores a dynamic default. Reapply the exact range and
+        # governor captured immediately before this campaign's first lock.
+        for policy in self._cpu_frequency_original_state["policies"]:
+            policy_dir = Path(policy["path"])
+            scaling_max = str(policy.get("scaling_max_khz", ""))
+            scaling_min = str(policy.get("scaling_min_khz", ""))
+            governor = str(policy.get("governor", ""))
+            if scaling_max:
+                self._write_sysfs_value(policy_dir / "scaling_max_freq", scaling_max)
+            if scaling_min:
+                self._write_sysfs_value(policy_dir / "scaling_min_freq", scaling_min)
+            if governor:
+                self._write_sysfs_value(policy_dir / "scaling_governor", governor)
+
+        boost = str(self._cpu_frequency_original_state.get("boost", ""))
+        if boost and (CPUFREQ_BASE / "boost").is_file():
+            self._write_sysfs_value(CPUFREQ_BASE / "boost", boost)
+        no_turbo = str(
+            self._cpu_frequency_original_state.get("intel_pstate_no_turbo", "")
+        )
+        no_turbo_path = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
+        if no_turbo and no_turbo_path.is_file():
+            self._write_sysfs_value(no_turbo_path, no_turbo)
+
+        restored = self._read_cpu_frequency_state()
+        restored_by_name = {item["name"]: item for item in restored["policies"]}
+        errors: List[str] = []
+        for original in self._cpu_frequency_original_state["policies"]:
+            actual = restored_by_name.get(original["name"], {})
+            for field in ("scaling_min_khz", "scaling_max_khz", "governor"):
+                if actual.get(field) != original.get(field):
+                    errors.append(
+                        f"{original['name']} {field}={actual.get(field, '')}, "
+                        f"expected {original.get(field, '')}"
+                    )
+        if errors:
+            raise RuntimeError(
+                "Pre-campaign CPU-frequency state was not restored: "
+                + " | ".join(errors)
+            )
+        self._cpu_frequency_restore_needed = False
+        self._cpu_frequency_locked = False
+        print("[CPU-FREQ] pre-campaign state restored")
 
     def _read_kernel_log(self) -> tuple[str | None, str]:
         command = ["dmesg", "--raw"]
@@ -580,8 +798,13 @@ class RealSenseStartupBench(Benchmark):
         if any(record_dir.glob("attempt-*")):
             raise RuntimeError(f"Attempt directories already exist in {record_dir}")
 
+        cpu_frequency_before_run = self._lock_cpu_frequency_once(record_dir)
+        (record_dir / "cpu_frequency_before_run.json").write_text(
+            json.dumps(cpu_frequency_before_run, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         base_manifest: Dict[str, Any] = {
-            "schema_version": 4,
+            "schema_version": 5,
             "policy_requested": POLICY_NAMES[policy],
             "priority_requested": 0 if policy == "other" else self._priority,
             "cycles": self._cycles,
@@ -599,6 +822,7 @@ class RealSenseStartupBench(Benchmark):
             "rsusb_usb_device": self._rsusb_usb_device,
             "rsusb_prepare_timeout_seconds": self._rsusb_prepare_timeout_seconds,
             "rsusb_unbind_settle_seconds": self._rsusb_unbind_settle_seconds,
+            "cpu_frequency": cpu_frequency_before_run,
             "probe": str(self._probe),
             "lime": str(self._lime),
             "clock": "CLOCK_BOOTTIME",
@@ -701,6 +925,26 @@ class RealSenseStartupBench(Benchmark):
         )
         final_summary["attempts"] = attempt_records
         final_summary["recovery"] = aggregate_recovery
+        cpu_frequency_after_run = (
+            self._read_cpu_frequency_state()
+            if self._cpu_frequency_mhz is not None
+            else {"policies": []}
+        )
+        frequency_errors = self._verify_cpu_frequency(cpu_frequency_after_run)
+        cpu_frequency_after_run.update({
+            "enabled": self._cpu_frequency_mhz is not None,
+            "requested_mhz": self._cpu_frequency_mhz,
+            "maintained": self._cpu_frequency_mhz is not None and not frequency_errors,
+            "verification_errors": frequency_errors,
+        })
+        final_summary["cpu_frequency"] = {
+            "before_run": cpu_frequency_before_run,
+            "after_run": cpu_frequency_after_run,
+        }
+        (record_dir / "cpu_frequency_after_run.json").write_text(
+            json.dumps(cpu_frequency_after_run, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         (record_dir / "attempts.json").write_text(
             json.dumps(attempt_records, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -727,11 +971,37 @@ class RealSenseStartupBench(Benchmark):
         summary = json.loads((record_dir / "summary.json").read_text(encoding="utf-8"))
         scheduler = summary.get("scheduler", {})
         startup_result = summary.get("startup_result", {})
+        cpu_frequency = summary.get("cpu_frequency", {})
+        frequency_before = cpu_frequency.get("before_run", {})
+        frequency_after = cpu_frequency.get("after_run", {})
+        frequency_policies = frequency_before.get("policies", [])
         requested = POLICY_NAMES[run_variables["policy"]]
         effective = scheduler.get("policy", "")
         recovery = summary.get("recovery", {})
         return {
             "librealsense_backend": "rsusb" if self._rsusb_backend else "v4l2",
+            "cpu_frequency_requested_mhz": frequency_before.get("requested_mhz", ""),
+            "cpu_frequency_locked": frequency_before.get("locked", False),
+            "cpu_frequency_maintained": frequency_after.get("maintained", False),
+            "cpu_frequency_policy_count": len(frequency_policies),
+            "cpu_frequency_governors": ",".join(
+                str(item.get("governor", "")) for item in frequency_policies
+            ),
+            "cpu_frequency_min_khz": ",".join(
+                str(item.get("scaling_min_khz", "")) for item in frequency_policies
+            ),
+            "cpu_frequency_max_khz": ",".join(
+                str(item.get("scaling_max_khz", "")) for item in frequency_policies
+            ),
+            "cpu_frequency_current_khz": ",".join(
+                str(item.get("scaling_current_khz", "")) for item in frequency_policies
+            ),
+            "temperature_before_run_millic": frequency_before.get(
+                "temperature_millic", ""
+            ),
+            "temperature_after_run_millic": frequency_after.get(
+                "temperature_millic", ""
+            ),
             "policy_requested": requested,
             "priority_requested": 0 if run_variables["policy"] == "other" else self._priority,
             "policy_effective": effective,
@@ -782,18 +1052,31 @@ def _run_campaign_with_cleanup(
     campaign: CampaignCartesianProduct,
     benchmark: RealSenseStartupBench,
 ) -> None:
+    cleanup_actions = (
+        ("restore V4L2 binding", benchmark.restore_v4l2_binding),
+        ("restore CPU frequency", benchmark.restore_cpu_frequency),
+    )
     try:
         campaign.run()
     except BaseException:
-        try:
-            benchmark.restore_v4l2_binding()
-        except Exception as cleanup_error:
-            print(
-                f"[RSUSB] failed to restore V4L2 binding: {cleanup_error}",
-                file=sys.stderr,
-            )
+        for description, cleanup in cleanup_actions:
+            try:
+                cleanup()
+            except Exception as cleanup_error:
+                print(
+                    f"[CLEANUP] failed to {description}: {cleanup_error}",
+                    file=sys.stderr,
+                )
         raise
-    benchmark.restore_v4l2_binding()
+
+    cleanup_errors: List[str] = []
+    for description, cleanup in cleanup_actions:
+        try:
+            cleanup()
+        except Exception as cleanup_error:
+            cleanup_errors.append(f"{description}: {cleanup_error}")
+    if cleanup_errors:
+        raise RuntimeError("Campaign cleanup failed: " + " | ".join(cleanup_errors))
 
 
 def main() -> None:
@@ -902,6 +1185,20 @@ def main() -> None:
         default=1.0,
         help="Quiescence delay after per-attempt UVC unbind (default: 1 second).",
     )
+    parser.add_argument(
+        "--cpu-frequency-mhz",
+        type=int,
+        default=1500,
+        help=(
+            "Lock all CPU-frequency policies once before the first measured run "
+            "and restore the pre-campaign state after all runs (default: 1500 MHz)."
+        ),
+    )
+    parser.add_argument(
+        "--no-cpu-frequency-lock",
+        action="store_true",
+        help="Leave CPU DVFS settings unchanged.",
+    )
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument(
@@ -949,6 +1246,8 @@ def main() -> None:
         parser.error("--rsusb-prepare-timeout-seconds must be positive")
     if args.rsusb_unbind_settle_seconds < 0:
         parser.error("--rsusb-unbind-settle-seconds must be non-negative")
+    if args.cpu_frequency_mhz < 1:
+        parser.error("--cpu-frequency-mhz must be positive")
 
     use_sudo = os.geteuid() != 0 and not args.no_sudo
     args.results_dir.mkdir(parents=True, exist_ok=True)
@@ -971,6 +1270,9 @@ def main() -> None:
         rsusb_usb_device=args.rsusb_usb_device,
         rsusb_prepare_timeout_seconds=args.rsusb_prepare_timeout_seconds,
         rsusb_unbind_settle_seconds=args.rsusb_unbind_settle_seconds,
+        cpu_frequency_mhz=(
+            None if args.no_cpu_frequency_lock else args.cpu_frequency_mhz
+        ),
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(

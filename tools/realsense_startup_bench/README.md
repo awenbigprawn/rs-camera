@@ -44,6 +44,22 @@ LiME requires a Linux kernel with BTF/eBPF support and root privileges. RR/FIFO
 also require root or CAP_SYS_NICE. Connect the D435 over USB 3 and ensure no
 other process owns it.
 
+## CPU-frequency control
+
+The campaign locks every cpufreq policy once, immediately before the first
+measured run, and keeps that setting for the complete campaign. The default is
+1500 MHz. It invokes `scripts/lock_cpu_freq.sh` only once; subsequent runs
+verify the lock without rewriting sysfs. After all runs, or after an ordinary
+error or `Ctrl+C`, cleanup invokes `scripts/restore_cpu_freq_default.sh` and
+then reapplies the exact min/max/governor state captured before the lock. An
+uncatchable termination such as `SIGKILL` still requires manual restoration.
+
+Use another controlled frequency with `--cpu-frequency-mhz MHZ`. Only an
+explicit DVFS experiment should use `--no-cpu-frequency-lock`. Each run records
+its before/after cpufreq state and temperature in JSON and in the campaign CSV.
+Run `sudo -v` before starting so the one-time lock and final restore can run
+non-interactively.
+
 ## Run
 
 From the repository root:
@@ -51,6 +67,7 @@ From the repository root:
     .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
       --policies other rr fifo \
       --priority 80 \
+      --cpu-frequency-mhz 1500 \
       --cycles 10 \
       --frames 10 \
       --nb-runs 3
@@ -177,8 +194,11 @@ Benchkit writes its campaign-level CSV below
 tools/realsense_startup_bench/results/. Each logical Benchkit record directory
 contains:
 
-- `run_manifest.json`: requested policy, priority, workload, recovery, and retry
-  configuration;
+- `run_manifest.json`: requested policy, priority, CPU frequency, workload,
+  recovery, and retry configuration;
+- `cpu_frequency_before_run.json` and `cpu_frequency_after_run.json`: cpufreq
+  policy, min/max/current frequency, governor, verification, and temperature;
+- `cpu_frequency_lock.txt`: output from the one-time lock helper (first run only);
 - `attempts.json`: ordered outcome and recovery metadata for every attempt;
 - `selected_attempt.txt`: the attempt whose measurements populate the
   campaign row;
@@ -227,6 +247,7 @@ measurement remains reproducible if defaults change:
       --recovery-reset-timeout-ms 5000 \
       --frame-timeout-ms 1500 \
       --join-timeout-ms 10 \
+      --cpu-frequency-mhz 1500 \
       --cycles 1 \
       --frames 60 \
       --nb-runs 20 \
