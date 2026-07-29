@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,10 @@ TRACER_SOURCE = REPO_ROOT / "tools" / "realsense_thread_trace" / "trace_pthreads
 CPU_LOCK = REPO_ROOT / "scripts" / "lock_cpu_freq.sh"
 CPU_RESTORE = REPO_ROOT / "scripts" / "restore_cpu_freq_default.sh"
 RSUSB_HELPER = REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
+NCNN_MODEL_PARAM = (
+    REPO_ROOT / "deps" / "ncnn" / "benchmark" / "models" / "mobilenet_v2.param"
+)
+DEFAULT_BROADCOM_VULKAN_ICD = Path("/usr/share/vulkan/icd.d/broadcom_icd.json")
 
 if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize repository submodules first.")
@@ -40,6 +45,7 @@ POLICY_NAMES = {
     "rr": "SCHED_RR",
     "fifo": "SCHED_FIFO",
 }
+GPU_NOISE_MODES = ("none", "mobilenet_v2_vulkan")
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:
@@ -67,6 +73,14 @@ def flatten(prefix: str, value: Any, output: Dict[str, Any]) -> None:
         output[prefix] = value
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for block in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def interrupt_totals(path: Path) -> Dict[str, int]:
     if not path.is_file():
         return {}
@@ -91,6 +105,13 @@ class RealSenseSteadyBench(Benchmark):
         rsusb_backend: bool,
         rsusb_usb_devices: List[str],
         cpu_frequency_mhz: int | None,
+        gpu_noise_modes: List[str],
+        gpu_noise_device: int,
+        gpu_noise_warmup_iterations: int,
+        gpu_noise_ready_timeout_seconds: float,
+        gpu_noise_cpu_affinity: str | None,
+        gpu_noise_vulkan_icd: Path | None,
+        build_jobs: int,
     ) -> None:
         super().__init__(
             command_wrappers=(),
@@ -108,10 +129,22 @@ class RealSenseSteadyBench(Benchmark):
         self._rsusb_backend = rsusb_backend
         self._rsusb_usb_devices = rsusb_usb_devices
         self._cpu_frequency_mhz = cpu_frequency_mhz
+        self._gpu_noise_modes = gpu_noise_modes
+        self._gpu_noise_enabled = any(mode != "none" for mode in gpu_noise_modes)
+        self._gpu_noise_device = gpu_noise_device
+        self._gpu_noise_warmup_iterations = gpu_noise_warmup_iterations
+        self._gpu_noise_ready_timeout_seconds = gpu_noise_ready_timeout_seconds
+        self._gpu_noise_cpu_affinity = gpu_noise_cpu_affinity
+        self._gpu_noise_vulkan_icd = (
+            gpu_noise_vulkan_icd.resolve() if gpu_noise_vulkan_icd else None
+        )
+        self._build_jobs = build_jobs
+        self._gpu_noise_process: subprocess.Popen[str] | None = None
         self._cpu_locked = False
         self._cpu_restore_needed = False
         self._rsusb_unbound = False
         self._probe = self._build_dir / "realsense_steady_probe"
+        self._gpu_noise = self._build_dir / "realsense_gpu_noise"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
 
     @property
@@ -124,7 +157,7 @@ class RealSenseSteadyBench(Benchmark):
 
     @staticmethod
     def get_run_var_names() -> List[str]:
-        return ["case_id", "policy"]
+        return ["case_id", "policy", "gpu_noise"]
 
     def _privileged(self, command: List[str]) -> List[str]:
         return ["sudo", "--non-interactive", *command] if self._use_sudo else command
@@ -137,6 +170,17 @@ class RealSenseSteadyBench(Benchmark):
             )
         if shutil.which("chrt") is None:
             raise RuntimeError("chrt is required (normally provided by util-linux).")
+        if self._gpu_noise_enabled:
+            if not NCNN_MODEL_PARAM.is_file():
+                raise RuntimeError(
+                    "The pinned ncnn MobileNetV2 graph is missing; initialize deps/ncnn recursively"
+                )
+            if self._gpu_noise_vulkan_icd and not self._gpu_noise_vulkan_icd.is_file():
+                raise RuntimeError(
+                    f"Vulkan ICD file does not exist: {self._gpu_noise_vulkan_icd}"
+                )
+            if self._gpu_noise_cpu_affinity and shutil.which("taskset") is None:
+                raise RuntimeError("taskset is required for --gpu-noise-cpu-affinity")
         if self._rsusb_backend and not self._rsusb_usb_devices:
             raise RuntimeError(
                 "--rsusb-backend requires one --rsusb-usb-device per connected camera"
@@ -159,16 +203,21 @@ class RealSenseSteadyBench(Benchmark):
                 str(self._build_dir),
                 "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                 f"-DFORCE_RSUSB_BACKEND={'ON' if self._rsusb_backend else 'OFF'}",
+                f"-DRS_CAMERA_BUILD_GPU_NOISE={'ON' if self._gpu_noise_enabled else 'OFF'}",
             ]
         )
+        build_targets = ["realsense_steady_probe"]
+        if self._gpu_noise_enabled:
+            build_targets.append("realsense_gpu_noise")
         subprocess.check_call(
             [
                 "cmake",
                 "--build",
                 str(self._build_dir),
                 "--target",
-                "realsense_steady_probe",
-                "-j4",
+                *build_targets,
+                "--parallel",
+                str(self._build_jobs),
             ]
         )
         compiler = os.environ.get("CC", "cc")
@@ -263,6 +312,123 @@ class RealSenseSteadyBench(Benchmark):
         self._run_rsusb_helper("bind")
         self._rsusb_unbound = False
         print("[RSUSB] kernel UVC interfaces rebound")
+
+    def _gpu_noise_command(
+        self,
+        ready_path: Path,
+        summary_path: Path,
+    ) -> List[str]:
+        command = ["chrt", "--other", "0"]
+        if self._gpu_noise_cpu_affinity:
+            command += ["taskset", "--cpu-list", self._gpu_noise_cpu_affinity]
+        command += [
+            str(self._gpu_noise),
+            "--model-param",
+            str(NCNN_MODEL_PARAM),
+            "--ready-file",
+            str(ready_path),
+            "--summary-output",
+            str(summary_path),
+            "--gpu-device",
+            str(self._gpu_noise_device),
+            "--warmup-iterations",
+            str(self._gpu_noise_warmup_iterations),
+            "--num-threads",
+            "1",
+        ]
+        return command
+
+    def _start_gpu_noise(self, mode: str, record_dir: Path) -> Dict[str, Any]:
+        if mode == "none":
+            return {"mode": "none", "enabled": False}
+        if mode != "mobilenet_v2_vulkan":
+            raise ValueError(f"Unsupported GPU-noise mode: {mode}")
+        if self._gpu_noise_process is not None:
+            raise RuntimeError("A GPU-noise process is already running")
+
+        ready_path = record_dir / "gpu_noise_ready.json"
+        summary_path = record_dir / "gpu_noise_summary.json"
+        stdout_path = record_dir / "gpu_noise_stdout.txt"
+        stderr_path = record_dir / "gpu_noise_stderr.txt"
+        command = self._gpu_noise_command(ready_path, summary_path)
+        environment = os.environ.copy()
+        if self._gpu_noise_vulkan_icd:
+            environment["VK_DRIVER_FILES"] = str(self._gpu_noise_vulkan_icd)
+
+        started = time.monotonic()
+        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_file:
+            self._gpu_noise_process = subprocess.Popen(
+                command,
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+
+        deadline = started + self._gpu_noise_ready_timeout_seconds
+        while time.monotonic() < deadline:
+            returncode = self._gpu_noise_process.poll()
+            if returncode is not None:
+                self._gpu_noise_process = None
+                detail = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    f"GPU noise exited before ready with code {returncode}: {detail}"
+                )
+            if ready_path.is_file():
+                try:
+                    ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    time.sleep(0.01)
+                    continue
+                if ready.get("ready"):
+                    ready["enabled"] = True
+                    ready["command"] = command
+                    ready["model_param_sha256"] = sha256_file(NCNN_MODEL_PARAM)
+                    ready["vulkan_icd"] = (
+                        str(self._gpu_noise_vulkan_icd) if self._gpu_noise_vulkan_icd else ""
+                    )
+                    ready["cpu_affinity"] = self._gpu_noise_cpu_affinity or ""
+                    print(
+                        f"[GPU-NOISE] ready on {ready.get('gpu_name', 'unknown')} "
+                        f"after {ready.get('startup_ms', 0):.1f} ms"
+                    )
+                    return ready
+            time.sleep(0.05)
+
+        self._stop_gpu_noise(record_dir)
+        raise RuntimeError(
+            f"GPU noise did not become ready within "
+            f"{self._gpu_noise_ready_timeout_seconds:.1f} seconds"
+        )
+
+    def _stop_gpu_noise(self, record_dir: Path | None = None) -> None:
+        process = self._gpu_noise_process
+        if process is None:
+            return
+        self._gpu_noise_process = None
+        forced = False
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                forced = True
+                process.kill()
+                process.wait(timeout=5)
+        if record_dir is not None:
+            (record_dir / "gpu_noise_process.json").write_text(
+                json.dumps(
+                    {"returncode": process.returncode, "forced_kill": forced},
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        print(f"[GPU-NOISE] stopped with code {process.returncode}")
 
     def _snapshot(self, output: Path) -> None:
         subprocess.run(
@@ -359,6 +525,7 @@ class RealSenseSteadyBench(Benchmark):
         self,
         case_id: str,
         policy: str,
+        gpu_noise: str,
         record_data_dir: Path,
         **kwargs: Any,
     ) -> str:
@@ -373,6 +540,7 @@ class RealSenseSteadyBench(Benchmark):
         lifecycle_path = record_dir / "thread_lifecycle.jsonl"
         lime_dir = record_dir / "lime_trace"
         stdout_path = record_dir / "probe_stdout.txt"
+        gpu_noise_ready: Dict[str, Any] = {"mode": gpu_noise, "enabled": False}
         before = record_dir / "topology_before.json"
         after = record_dir / "topology_after.json"
         (record_dir / "case.json").write_text(
@@ -409,6 +577,21 @@ class RealSenseSteadyBench(Benchmark):
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
             "lime_enabled": self._use_lime,
             "cpu_frequency_mhz": self._cpu_frequency_mhz,
+            "gpu_noise": {
+                "mode": gpu_noise,
+                "gpu_device": self._gpu_noise_device,
+                "warmup_iterations": self._gpu_noise_warmup_iterations,
+                "cpu_affinity": self._gpu_noise_cpu_affinity,
+                "vulkan_icd": (
+                    str(self._gpu_noise_vulkan_icd)
+                    if self._gpu_noise_vulkan_icd
+                    else None
+                ),
+                "model_param": str(NCNN_MODEL_PARAM),
+                "model_param_sha256": (
+                    sha256_file(NCNN_MODEL_PARAM) if gpu_noise != "none" else None
+                ),
+            },
             "command": command,
             "clock": "CLOCK_BOOTTIME",
         }
@@ -431,6 +614,11 @@ class RealSenseSteadyBench(Benchmark):
         timeout = max(int(automatic_seconds), int(measurement_timeout + 60))
         kernel_before, kernel_error = self._kernel_log()
         try:
+            gpu_noise_ready = self._start_gpu_noise(gpu_noise, record_dir)
+            (record_dir / "gpu_noise_configuration.json").write_text(
+                json.dumps(gpu_noise_ready, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             output = self.run_bench_command(
                 run_command=command,
                 wrapped_run_command=wrapped_command,
@@ -443,6 +631,7 @@ class RealSenseSteadyBench(Benchmark):
             )
             stdout_path.write_text(output, encoding="utf-8")
         finally:
+            self._stop_gpu_noise(record_dir)
             kernel_after, after_error = self._kernel_log()
             kernel_error = kernel_error or after_error
             if kernel_before is not None and kernel_after is not None:
@@ -490,6 +679,8 @@ class RealSenseSteadyBench(Benchmark):
             "error": data.get("error", "summary file missing"),
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
             "policy_requested": POLICY_NAMES[run_variables["policy"]],
+            "gpu_noise_mode": run_variables["gpu_noise"],
+            "gpu_noise_enabled": run_variables["gpu_noise"] != "none",
             "camera_count": data.get("run", {}).get("camera_count", 0),
             "deliveries": aggregate.get("deliveries", 0),
             "frames": aggregate.get("frames", 0),
@@ -498,6 +689,47 @@ class RealSenseSteadyBench(Benchmark):
             "measurement_duration_ms": data.get("measurement", {}).get("duration_ms", 0),
             "record_data_dir": str(record_dir),
         }
+        gpu_summary_path = record_dir / "gpu_noise_summary.json"
+        gpu_ready_path = record_dir / "gpu_noise_ready.json"
+        gpu_summary = (
+            json.loads(gpu_summary_path.read_text(encoding="utf-8"))
+            if gpu_summary_path.is_file()
+            else {}
+        )
+        gpu_ready = (
+            json.loads(gpu_ready_path.read_text(encoding="utf-8"))
+            if gpu_ready_path.is_file()
+            else {}
+        )
+        result["gpu_noise_ready"] = bool(gpu_ready.get("ready", False))
+        result["gpu_noise_model_param_sha256"] = (
+            sha256_file(NCNN_MODEL_PARAM) if run_variables["gpu_noise"] != "none" else ""
+        )
+        gpu_process_path = record_dir / "gpu_noise_process.json"
+        gpu_process = (
+            json.loads(gpu_process_path.read_text(encoding="utf-8"))
+            if gpu_process_path.is_file()
+            else {}
+        )
+        result["gpu_noise_process_returncode"] = gpu_process.get("returncode", "")
+        result["gpu_noise_forced_kill"] = gpu_process.get("forced_kill", False)
+        if gpu_summary:
+            flatten("gpu_noise", gpu_summary, result)
+        if run_variables["gpu_noise"] != "none":
+            gpu_valid = (
+                bool(gpu_ready.get("ready"))
+                and bool(gpu_summary.get("success"))
+                and gpu_process.get("returncode") == 0
+                and not gpu_process.get("forced_kill", False)
+            )
+            result["gpu_noise_valid"] = gpu_valid
+            if not gpu_valid:
+                result["success"] = False
+                result["error"] = (
+                    str(result.get("error", "")) + " | invalid GPU-noise process"
+                ).strip(" |")
+        else:
+            result["gpu_noise_valid"] = True
         flatten("workload", case.get("workload", {}), result)
         flatten("physical", case.get("physical", {}), result)
         flatten("delivery_interarrival_ms", aggregate.get("delivery_interarrival_ms", {}), result)
@@ -571,6 +803,7 @@ def run_with_cleanup(
     finally:
         errors = []
         for description, cleanup in (
+            ("stop GPU noise", benchmark._stop_gpu_noise),
             ("restore V4L2 binding", benchmark.restore_v4l2_binding),
             ("restore CPU frequency", benchmark.restore_cpu_frequency),
         ):
@@ -602,6 +835,28 @@ def main() -> None:
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument("--no-lime", action="store_true")
     parser.add_argument("--no-sudo", action="store_true")
+    parser.add_argument(
+        "--gpu-noise-modes",
+        nargs="+",
+        choices=GPU_NOISE_MODES,
+        default=["none"],
+        help="Cartesian GPU-noise variable; the only workload is pinned MobileNetV2+ncnn Vulkan",
+    )
+    parser.add_argument("--gpu-noise-device", type=int, default=0)
+    parser.add_argument("--gpu-noise-warmup-iterations", type=int, default=10)
+    parser.add_argument("--gpu-noise-ready-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--gpu-noise-cpu-affinity")
+    parser.add_argument(
+        "--gpu-noise-vulkan-icd",
+        type=Path,
+        help="Vulkan ICD JSON; auto-selects the Raspberry Pi Broadcom ICD when present",
+    )
+    parser.add_argument(
+        "--build-jobs",
+        type=int,
+        default=max(1, (os.cpu_count() or 2) - 1),
+        help="Parallel build jobs; defaults to leaving one CPU free",
+    )
     parser.add_argument("--rsusb-backend", action="store_true")
     parser.add_argument("--rsusb-usb-device", action="append", default=[])
     parser.add_argument(
@@ -611,6 +866,18 @@ def main() -> None:
         help="Lock once before the first run; use 0 to disable",
     )
     args = parser.parse_args()
+    if args.build_jobs < 1:
+        raise SystemExit("--build-jobs must be positive")
+    if args.gpu_noise_warmup_iterations < 1:
+        raise SystemExit("--gpu-noise-warmup-iterations must be positive")
+    if args.gpu_noise_ready_timeout_seconds <= 0:
+        raise SystemExit("--gpu-noise-ready-timeout-seconds must be positive")
+    if (
+        args.gpu_noise_vulkan_icd is None
+        and DEFAULT_BROADCOM_VULKAN_ICD.is_file()
+        and any(mode != "none" for mode in args.gpu_noise_modes)
+    ):
+        args.gpu_noise_vulkan_icd = DEFAULT_BROADCOM_VULKAN_ICD
 
     cases = load_cases(args.config)
     if args.case_ids:
@@ -641,6 +908,13 @@ def main() -> None:
         rsusb_backend=args.rsusb_backend,
         rsusb_usb_devices=args.rsusb_usb_device,
         cpu_frequency_mhz=args.cpu_frequency_mhz or None,
+        gpu_noise_modes=args.gpu_noise_modes,
+        gpu_noise_device=args.gpu_noise_device,
+        gpu_noise_warmup_iterations=args.gpu_noise_warmup_iterations,
+        gpu_noise_ready_timeout_seconds=args.gpu_noise_ready_timeout_seconds,
+        gpu_noise_cpu_affinity=args.gpu_noise_cpu_affinity,
+        gpu_noise_vulkan_icd=args.gpu_noise_vulkan_icd,
+        build_jobs=args.build_jobs,
     )
     campaign = CampaignCartesianProduct(
         name="realsense_steady",
@@ -649,6 +923,7 @@ def main() -> None:
         variables={
             "case_id": [case["case_id"] for case in cases],
             "policy": args.policies,
+            "gpu_noise": args.gpu_noise_modes,
         },
         constants=None,
         debug=False,

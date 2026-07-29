@@ -7,3 +7,6 @@
 [submodule "deps/benchkit"]
 	path = deps/benchkit
 	url = git@github.com:open-s4c/benchkit.git
+[submodule "deps/ncnn"]
+	path = deps/ncnn
+	url = https://github.com/Tencent/ncnn.git

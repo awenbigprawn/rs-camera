@@ -158,6 +158,7 @@ noise:
   cpu_busy
   shi_tomasi
   usb_storage_io
+  gpu_mobilenet_v2_vulkan
 ```
 
 An optional memory-bandwidth workload may be added after the primary matrix if
@@ -462,12 +463,40 @@ The primary USB condition should use a time-based, sustained workload that
 starts before camera warm-up and continues until measurement completes. Start
 the noise before a startup attempt when studying startup interference.
 
-### 7.4 Noise timing
+### 7.4 MobileNetV2 Vulkan GPU noise
+
+Use the single selected GPU workload implemented by `realsense_gpu_noise`:
+
+```text
+framework: pinned ncnn submodule
+network graph: MobileNetV2
+input: fixed 224x224x3 tensor
+weights: deterministic zero values
+GPU API: Vulkan compute
+process policy: SCHED_OTHER
+instances: 1
+warm-up: 10 complete inferences before camera startup
+```
+
+The deterministic weights keep the workload independent of external model
+hosting while preserving the selected MobileNetV2 layer graph and GPU command
+stream. Record the ncnn git revision, parameter-file SHA-256, Vulkan ICD,
+physical-device and driver names, inference count, and inference-latency
+statistics. Reject software Vulkan devices such as llvmpipe. On Raspberry Pi 5,
+select the Broadcom V3DV ICD explicitly. The GPU process must signal readiness
+after pipeline creation and warm-up, and must be stopped and joined after every
+camera run.
+
+This is the only GPU-noise treatment in the formal experiment. Synthetic
+compute/copy loops, ResNet18, and YOLO are excluded after candidate selection.
+
+### 7.5 Noise timing
 
 For steady-state experiments:
 
 ```text
-noise start: at least 10 s before camera warm-up
+CPU and USB noise start: at least 10 s before camera warm-up
+GPU noise start: before camera startup; wait for 10 complete warm-up inferences and ready signal
 noise stop: after camera measurement and pipeline stop
 ```
 
@@ -674,12 +703,12 @@ A complete Cartesian product would be too large:
 x 4 policies
 x 2 workloads
 x 4 camera counts
-x 4 noise conditions
-= 256 steady-state configurations
+x 5 noise conditions
+= 320 steady-state configurations
 ```
 
 At five repetitions and ten minutes per repetition, this would require more
-than 213 hours of measurement before startup, warm-up, reboot, recovery, and
+than 266 hours of measurement before startup, warm-up, reboot, recovery, and
 one-hour runs.
 
 Use staged experiments instead.
@@ -737,7 +766,7 @@ kernel: default, PREEMPT_RT
 camera_count: 1 and maximum feasible count
 policy: OTHER and the best real-time policy
 workload: representative, stress
-noise: none, cpu_busy, shi_tomasi, usb_storage_io
+noise: none, cpu_busy, shi_tomasi, usb_storage_io, gpu_mobilenet_v2_vulkan
 ```
 
 ### Stage F: long-run validation
@@ -811,6 +840,12 @@ Steady-state campaigns:
 
 ```text
 tools/realsense_steady_bench/run_steady_campaign.py
+```
+
+Selected GPU noise executable:
+
+```text
+src/realsense_gpu_noise.cpp
 ```
 
 Five-minute parameter exploration:

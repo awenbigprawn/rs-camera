@@ -12,6 +12,8 @@ BUILD_PROJECT=0
 SYSTEM_ONLY=0
 SKIP_APT_UPDATE=0
 RSUSB_BACKEND=OFF
+GPU_NOISE=0
+BUILD_JOBS="${BUILD_JOBS:-}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-realsense-thread-trace}"
 VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
 
@@ -20,12 +22,14 @@ usage() {
 Usage: scripts/install_dependencies_ubuntu.sh [OPTIONS]
 
 Install dependencies for librealsense, LiME/eBPF, Benchkit, and the RealSense
-startup benchmark.
+startup and steady-state benchmarks.
 
 Options:
   --build                 Build LiME, d435_sensor_probe, and the pthread tracer.
   --build-dir PATH        CMake build directory used by --build.
   --rsusb-backend         Build vendored librealsense with its libusb backend.
+  --gpu-noise             Install Vulkan packages and build MobileNetV2 GPU noise.
+  --build-jobs N          Parallel build jobs (default: online CPUs minus one).
   --system-only           Install system packages and Rust; skip project setup.
   --skip-apt-update       Do not run apt-get update.
   -h, --help              Show this help.
@@ -33,6 +37,7 @@ Options:
 Environment:
   BUILD_DIR               Default CMake build directory.
   VENV_DIR                Default Python virtual environment directory.
+  BUILD_JOBS              Default parallel build jobs.
 
 Run this script without sudo. It requests sudo only for apt package operations.
 EOF
@@ -134,6 +139,15 @@ while [ "$#" -gt 0 ]; do
             RSUSB_BACKEND=ON
             shift
             ;;
+        --gpu-noise)
+            GPU_NOISE=1
+            shift
+            ;;
+        --build-jobs)
+            [ "$#" -ge 2 ] || die "missing value for --build-jobs"
+            BUILD_JOBS=$2
+            shift 2
+            ;;
         --system-only)
             SYSTEM_ONLY=1
             shift
@@ -151,6 +165,18 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+if [ -z "$BUILD_JOBS" ]; then
+    online_cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
+    if [ "$online_cpus" -gt 1 ]; then
+        BUILD_JOBS=$((online_cpus - 1))
+    else
+        BUILD_JOBS=1
+    fi
+fi
+case "$BUILD_JOBS" in
+    *[!0-9]*|0) die "--build-jobs must be a positive integer" ;;
+esac
 
 if [ "$SYSTEM_ONLY" -eq 1 ] && [ "$BUILD_PROJECT" -eq 1 ]; then
     die "--system-only and --build cannot be used together"
@@ -198,6 +224,14 @@ util-linux
 v4l-utils
 zlib1g-dev
 "
+
+if [ "$GPU_NOISE" -eq 1 ]; then
+    APT_PACKAGES="$APT_PACKAGES
+libvulkan-dev
+mesa-vulkan-drivers
+vulkan-tools
+"
+fi
 
 if [ "$SKIP_APT_UPDATE" -eq 0 ]; then
     sudo apt-get update
@@ -257,11 +291,18 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
         -S "$REPO_ROOT" \
         -B "$BUILD_DIR" \
         -DFORCE_RSUSB_BACKEND="$RSUSB_BACKEND" \
+        -DRS_CAMERA_BUILD_GPU_NOISE="$(if [ "$GPU_NOISE" -eq 1 ]; then printf ON; else printf OFF; fi)" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    BUILD_TARGETS="d435_sensor_probe"
+    if [ "$GPU_NOISE" -eq 1 ]; then
+        BUILD_TARGETS="$BUILD_TARGETS realsense_gpu_noise"
+    fi
+    # Intentional word splitting supplies one CMake target per list item.
+    # shellcheck disable=SC2086
     cmake \
         --build "$BUILD_DIR" \
-        --target d435_sensor_probe \
-        --parallel "$(nproc)"
+        --target $BUILD_TARGETS \
+        --parallel "$BUILD_JOBS"
 
     cc \
         -shared \
@@ -280,8 +321,12 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
     echo "  LiME:   $REPO_ROOT/deps/lime-rtw/target/release/lime-rtw"
     echo "  Probe:  $BUILD_DIR/d435_sensor_probe"
     echo "  Tracer: $BUILD_DIR/libtrace_pthreads.so"
+    if [ "$GPU_NOISE" -eq 1 ]; then
+        echo "  GPU noise: $BUILD_DIR/realsense_gpu_noise"
+    fi
 else
     echo
     echo "Dependencies are installed. Build everything with:"
     echo "  $REPO_ROOT/scripts/install_dependencies_ubuntu.sh --skip-apt-update --build"
+    echo "Add --gpu-noise to install Vulkan support and build the selected GPU workload."
 fi

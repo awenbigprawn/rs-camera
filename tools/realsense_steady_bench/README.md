@@ -59,6 +59,13 @@ cmake -S . -B build-realsense-steady -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build-realsense-steady --target realsense_steady_probe -j4
 ```
 
+To build the selected Vulkan GPU-noise workload, initialize the pinned ncnn
+submodule and install the optional dependencies:
+
+```sh
+./scripts/install_dependencies_ubuntu.sh --gpu-noise --build
+```
+
 ## Short Smoke Campaign
 
 The following takes approximately ten seconds per policy after startup:
@@ -133,6 +140,53 @@ This creates twelve runs:
 The workload description and exact profiles are copied into `case.json` and
 flattened into the Benchkit result CSV.
 
+## Selected GPU-Noise Workload
+
+The formal GPU-interference condition is `mobilenet_v2_vulkan`. It continuously
+executes the pinned ncnn MobileNetV2 224x224x3 computation graph on a hardware
+Vulkan device. `none` is the paired baseline. Synthetic Vulkan arithmetic and
+memory-copy loops, ResNet18, and YOLO are intentionally not exposed as formal
+benchmark modes.
+
+The graph uses deterministic zero weights and a fixed input tensor. Classification
+accuracy is irrelevant to this interference workload; this choice makes every
+run independent of external model downloads while preserving the exact
+MobileNetV2 layer graph and GPU command stream used during candidate selection.
+The ncnn git revision and SHA-256 of `mobilenet_v2.param` identify the workload.
+
+Before each camera run, the runner starts one `SCHED_OTHER` noise process and
+waits for model loading plus ten warm-up inferences. Only after
+`gpu_noise_ready.json` exists does camera startup begin. At the end of the run,
+the process handles `SIGTERM`, completes its in-flight inference, and writes
+latency and iteration statistics. A software Vulkan CPU device is rejected, so
+llvmpipe cannot silently turn this into CPU noise. On Raspberry Pi, the runner
+auto-selects `/usr/share/vulkan/icd.d/broadcom_icd.json` when it exists.
+
+Run a paired five-minute comparison for both workloads and two policies:
+
+```sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
+  --policies other rr \
+  --gpu-noise-modes none mobilenet_v2_vulkan \
+  --priority 80 \
+  --nb-runs 3 \
+  --serial CAMERA_SERIAL \
+  --cpu-frequency-mhz 1500 \
+  --results-dir tools/realsense_steady_bench/results/gpu_noise_5min
+```
+
+This creates 24 runs:
+
+```text
+2 workloads x 2 policies x 2 GPU-noise modes x 3 repetitions
+```
+
+Optional controls include `--gpu-noise-device`,
+`--gpu-noise-warmup-iterations`, `--gpu-noise-ready-timeout-seconds`,
+`--gpu-noise-vulkan-icd`, and `--gpu-noise-cpu-affinity`. CPU affinity is left
+unset by default to match the candidate-selection experiment.
+
 ## Multiple Cameras
 
 Pass one serial per camera. Each selected camera gets its own pipeline:
@@ -182,6 +236,12 @@ steady_summary.json
 kernel_log.txt
 frame_events.csv
 probe_stdout.txt
+gpu_noise_configuration.json
+gpu_noise_ready.json
+gpu_noise_summary.json
+gpu_noise_process.json
+gpu_noise_stdout.txt
+gpu_noise_stderr.txt
 thread_lifecycle.jsonl
 lime_trace/
 thread_steady_intervals.csv

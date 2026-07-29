@@ -7,6 +7,11 @@ option(
     "Use an installed librealsense2 package instead of the vendored submodule"
     OFF
 )
+option(
+    RS_CAMERA_BUILD_GPU_NOISE
+    "Build the pinned ncnn MobileNetV2 Vulkan GPU-noise workload"
+    OFF
+)
 
 find_package(Threads REQUIRED)
 
@@ -97,3 +102,41 @@ target_link_libraries(
         "${RS_CAMERA_LIBREALSENSE_TARGET}"
         Threads::Threads
 )
+
+if(RS_CAMERA_BUILD_GPU_NOISE)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/ncnn/CMakeLists.txt")
+        message(
+            FATAL_ERROR
+            "The ncnn submodule is missing. Run: git submodule update --init --recursive deps/ncnn"
+        )
+    endif()
+
+    set(NCNN_VULKAN ON CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(NCNN_C_API OFF CACHE BOOL "" FORCE)
+    set(NCNN_BF16 OFF CACHE BOOL "" FORCE)
+    set(NCNN_INT8 OFF CACHE BOOL "" FORCE)
+    set(NCNN_INSTALL_SDK OFF CACHE BOOL "" FORCE)
+    set(NCNN_PIXEL OFF CACHE BOOL "" FORCE)
+    set(NCNN_PYTHON OFF CACHE BOOL "" FORCE)
+    set(NCNN_RUNTIME_CPU ON CACHE BOOL "" FORCE)
+
+    add_subdirectory(deps/ncnn EXCLUDE_FROM_ALL)
+
+    add_executable(realsense_gpu_noise src/realsense_gpu_noise.cpp)
+    target_compile_features(realsense_gpu_noise PRIVATE cxx_std_17)
+    target_compile_definitions(
+        realsense_gpu_noise
+        PRIVATE
+            RS_CAMERA_MOBILENET_V2_PARAM="${CMAKE_CURRENT_SOURCE_DIR}/deps/ncnn/benchmark/models/mobilenet_v2.param"
+    )
+    target_link_libraries(
+        realsense_gpu_noise
+        PRIVATE
+            ncnn
+            Threads::Threads
+    )
+endif()
