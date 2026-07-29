@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_DIR = REPO_ROOT / "tools" / "realsense_startup_bench"
+TOOLS_DIR = REPO_ROOT / "tools"
 BENCHKIT_PATH = REPO_ROOT / "deps" / "benchkit"
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-startup"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
@@ -27,6 +28,7 @@ if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize the repository submodules first.")
 sys.path.insert(0, str(BENCHKIT_PATH))
 sys.path.insert(0, str(TOOL_DIR))
+sys.path.insert(0, str(TOOLS_DIR))
 
 _BENCHKIT_IMPORT_ERROR = None
 try:
@@ -37,6 +39,10 @@ except ModuleNotFoundError as error:
     Benchmark = object
     CampaignCartesianProduct = None
 from parse_startup_trace import parse_startup_trace
+from realsense_benchmark_utils import (  # noqa: E402
+    DropCachesBeforeRun,
+    memory_cleanup_result_fields,
+)
 
 
 POLICY_NAMES = {
@@ -68,13 +74,15 @@ class RealSenseStartupBench(Benchmark):
         rsusb_prepare_timeout_seconds: float,
         rsusb_unbind_settle_seconds: float,
         cpu_frequency_mhz: int | None,
+        drop_caches_before_run: bool,
         use_sudo: bool,
     ) -> None:
+        memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
         super().__init__(
             command_wrappers=(),
             command_attachments=(),
             shared_libs=(),
-            pre_run_hooks=(),
+            pre_run_hooks=(memory_cleanup_hook,) if drop_caches_before_run else (),
             post_run_hooks=(),
         )
         self._build_dir = build_dir.resolve()
@@ -97,6 +105,8 @@ class RealSenseStartupBench(Benchmark):
         self._rsusb_prepare_timeout_seconds = rsusb_prepare_timeout_seconds
         self._rsusb_unbind_settle_seconds = rsusb_unbind_settle_seconds
         self._cpu_frequency_mhz = cpu_frequency_mhz
+        self._drop_caches_before_run = drop_caches_before_run
+        self._memory_cleanup_hook = memory_cleanup_hook
         self._cpu_frequency_original_state: Dict[str, Any] | None = None
         self._cpu_frequency_locked = False
         self._cpu_frequency_restore_needed = False
@@ -124,6 +134,8 @@ class RealSenseStartupBench(Benchmark):
             )
         if shutil.which("chrt") is None:
             raise RuntimeError("chrt is required (normally provided by util-linux).")
+        if self._drop_caches_before_run:
+            self._memory_cleanup_hook.validate()
         if (
             self._recover_on_failure in ("usb", "full-reset")
             and shutil.which("usbreset") is None
@@ -823,6 +835,9 @@ class RealSenseStartupBench(Benchmark):
             "rsusb_prepare_timeout_seconds": self._rsusb_prepare_timeout_seconds,
             "rsusb_unbind_settle_seconds": self._rsusb_unbind_settle_seconds,
             "cpu_frequency": cpu_frequency_before_run,
+            "drop_caches_before_run": getattr(
+                self, "_drop_caches_before_run", False
+            ),
             "probe": str(self._probe),
             "lime": str(self._lime),
             "clock": "CLOCK_BOOTTIME",
@@ -975,10 +990,15 @@ class RealSenseStartupBench(Benchmark):
         frequency_before = cpu_frequency.get("before_run", {})
         frequency_after = cpu_frequency.get("after_run", {})
         frequency_policies = frequency_before.get("policies", [])
+        memory_cleanup = memory_cleanup_result_fields(
+            record_dir,
+            configured=getattr(self, "_drop_caches_before_run", False),
+        )
         requested = POLICY_NAMES[run_variables["policy"]]
         effective = scheduler.get("policy", "")
         recovery = summary.get("recovery", {})
         return {
+            **memory_cleanup,
             "librealsense_backend": "rsusb" if self._rsusb_backend else "v4l2",
             "cpu_frequency_requested_mhz": frequency_before.get("requested_mhz", ""),
             "cpu_frequency_locked": frequency_before.get("locked", False),
@@ -1206,6 +1226,14 @@ def main() -> None:
         action="store_true",
         help="Do not add sudo when not root (LiME/eBPF and RT policies will then require capabilities).",
     )
+    parser.add_argument(
+        "--no-drop-caches",
+        action="store_true",
+        help=(
+            "Do not sync and drop Linux page cache, dentries, and inodes before "
+            "each logical Benchkit run."
+        ),
+    )
     args = parser.parse_args()
 
     if _BENCHKIT_IMPORT_ERROR is not None:
@@ -1273,6 +1301,7 @@ def main() -> None:
         cpu_frequency_mhz=(
             None if args.no_cpu_frequency_lock else args.cpu_frequency_mhz
         ),
+        drop_caches_before_run=not args.no_drop_caches,
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(

@@ -712,6 +712,15 @@ Start each measured run from the same logical state. Restore CPU frequency,
 noise processes, USB bindings, and scheduler settings after interrupted
 campaigns.
 
+The startup and steady-state Benchkit runners establish a cold Linux filesystem
+cache before every logical repetition by completing `sync` and writing `3` to
+`/proc/sys/vm/drop_caches`. This operation reclaims page cache, dentries, and
+inodes but does not clear anonymous memory or swap. Record its duration and
+before/after `/proc/meminfo` counters with every run. Do not repeat it between
+startup cycles or recovery attempts inside one logical repetition, and label
+any run collected with cache dropping disabled as a separate warm-cache
+condition.
+
 ## 12. Staged Experiment Plan
 
 A complete Cartesian product would be too large:

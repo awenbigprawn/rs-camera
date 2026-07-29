@@ -87,6 +87,14 @@ The runner locks CPU frequency once before the first run (1500 MHz by default)
 and restores dynamic scaling after the entire campaign, including interrupted
 campaigns. Disable locking with `--cpu-frequency-mhz 0`.
 
+Before every logical Benchkit run, the runner also executes `sync` and writes
+`3` to `/proc/sys/vm/drop_caches`. This establishes a cold Linux page cache and
+reclaims dentries and inodes before noise warm-up or camera startup; anonymous
+memory and swap are not cleared. The operation runs once per repetition and is
+recorded in `memory_cleanup_before_run.json` and the campaign CSV. Run `sudo -v`
+before the campaign. Use `--no-drop-caches` only for debugging or a separately
+labelled warm-cache condition.
+
 Use `--no-lime` only for functional debugging. It keeps the pthread lifecycle
 trace but cannot produce scheduler execution-time distributions.
 
@@ -274,6 +282,7 @@ Every Benchkit record directory contains:
 ```text
 case.json
 run_manifest.json
+memory_cleanup_before_run.json
 topology_before.json
 topology_after.json
 steady_summary.json

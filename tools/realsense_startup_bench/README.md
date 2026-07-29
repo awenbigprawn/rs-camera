@@ -60,6 +60,21 @@ its before/after cpufreq state and temperature in JSON and in the campaign CSV.
 Run `sudo -v` before starting so the one-time lock and final restore can run
 non-interactively.
 
+## Per-run filesystem-cache control
+
+Before each logical Benchkit run, a shared pre-run hook executes `sync` and
+writes `3` to `/proc/sys/vm/drop_caches`. This reclaims the Linux page cache,
+dentries, and inodes before CPU-frequency verification, camera recovery,
+tracing, and the measured process begin. It does not clear anonymous process
+memory or swap.
+
+The hook runs once per Benchkit repetition, not once per camera cycle or failed
+recovery attempt. Each run records the operation, duration, and selected
+`/proc/meminfo` values in `memory_cleanup_before_run.json`; the same status and
+memory fields are copied to the campaign CSV. Run `sudo -v` before the campaign
+so the privileged write can remain non-interactive. Use `--no-drop-caches` only
+for functional debugging or an explicitly labelled warm-cache experiment.
+
 ## Run
 
 From the repository root:
@@ -199,6 +214,8 @@ contains:
 - `cpu_frequency_before_run.json` and `cpu_frequency_after_run.json`: cpufreq
   policy, min/max/current frequency, governor, verification, and temperature;
 - `cpu_frequency_lock.txt`: output from the one-time lock helper (first run only);
+- `memory_cleanup_before_run.json`: per-run cache-drop status, duration, and
+  before/after memory counters;
 - `attempts.json`: ordered outcome and recovery metadata for every attempt;
 - `selected_attempt.txt`: the attempt whose measurements populate the
   campaign row;
@@ -227,6 +244,9 @@ successfully with no matching UVC errors is represented by zero errors; check
 `kernel_log_captured` before interpreting that zero. Recovery adds
 `recovery_attempted`, `recovery_count`, `recovery_method`,
 `recovery_success`, and `recovery_error`.
+Cache control adds `memory_cleanup_enabled`, `memory_cleanup_recorded`,
+`memory_cleanup_success`, `memory_cleanup_duration_ms`, and before/after
+`MemAvailable`, `Cached`, and `SReclaimable` fields.
 
 ## Build a startup-thread timing model
 

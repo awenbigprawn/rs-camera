@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_DIR = REPO_ROOT / "tools" / "realsense_steady_bench"
+TOOLS_DIR = REPO_ROOT / "tools"
 BENCHKIT_PATH = REPO_ROOT / "deps" / "benchkit"
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-steady"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
@@ -35,10 +36,15 @@ if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize repository submodules first.")
 sys.path.insert(0, str(BENCHKIT_PATH))
 sys.path.insert(0, str(TOOL_DIR))
+sys.path.insert(0, str(TOOLS_DIR))
 
 from benchkit.benchmark import Benchmark  # noqa: E402
 from benchkit.campaign import CampaignCartesianProduct  # noqa: E402
 from parse_steady_trace import parse_steady_trace  # noqa: E402
+from realsense_benchmark_utils import (  # noqa: E402
+    DropCachesBeforeRun,
+    memory_cleanup_result_fields,
+)
 
 
 POLICY_NAMES = {
@@ -104,6 +110,7 @@ class RealSenseSteadyBench(Benchmark):
         priority: int,
         use_lime: bool,
         use_sudo: bool,
+        drop_caches_before_run: bool,
         rsusb_backend: bool,
         rsusb_usb_devices: List[str],
         cpu_frequency_mhz: int | None,
@@ -120,11 +127,12 @@ class RealSenseSteadyBench(Benchmark):
         usb_storage_ready_timeout_seconds: float,
         build_jobs: int,
     ) -> None:
+        memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
         super().__init__(
             command_wrappers=(),
             command_attachments=(),
             shared_libs=(),
-            pre_run_hooks=(),
+            pre_run_hooks=(memory_cleanup_hook,) if drop_caches_before_run else (),
             post_run_hooks=(),
         )
         self._cases = {case["case_id"]: case for case in cases}
@@ -133,6 +141,8 @@ class RealSenseSteadyBench(Benchmark):
         self._priority = priority
         self._use_lime = use_lime
         self._use_sudo = use_sudo
+        self._drop_caches_before_run = drop_caches_before_run
+        self._memory_cleanup_hook = memory_cleanup_hook
         self._rsusb_backend = rsusb_backend
         self._rsusb_usb_devices = rsusb_usb_devices
         self._cpu_frequency_mhz = cpu_frequency_mhz
@@ -291,6 +301,8 @@ class RealSenseSteadyBench(Benchmark):
             )
         if shutil.which("chrt") is None:
             raise RuntimeError("chrt is required (normally provided by util-linux).")
+        if self._drop_caches_before_run:
+            self._memory_cleanup_hook.validate()
         if self._usb_storage_noise_enabled:
             self._usb_storage_identity = self._validate_usb_storage_device()
         if self._gpu_noise_enabled:
@@ -832,6 +844,9 @@ class RealSenseSteadyBench(Benchmark):
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
             "lime_enabled": self._use_lime,
             "cpu_frequency_mhz": self._cpu_frequency_mhz,
+            "drop_caches_before_run": getattr(
+                self, "_drop_caches_before_run", False
+            ),
             "usb_storage_noise": {
                 "mode": usb_storage_noise,
                 "device": (
@@ -948,7 +963,12 @@ class RealSenseSteadyBench(Benchmark):
         path = record_dir / "steady_summary.json"
         data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         aggregate = data.get("aggregate", {})
+        memory_cleanup = memory_cleanup_result_fields(
+            record_dir,
+            configured=getattr(self, "_drop_caches_before_run", False),
+        )
         result: Dict[str, Any] = {
+            **memory_cleanup,
             "success": data.get("success", False),
             "error": data.get("error", "summary file missing"),
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
@@ -1158,6 +1178,14 @@ def main() -> None:
     parser.add_argument("--no-lime", action="store_true")
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
+        "--no-drop-caches",
+        action="store_true",
+        help=(
+            "Do not sync and drop Linux page cache, dentries, and inodes before "
+            "each logical Benchkit run."
+        ),
+    )
+    parser.add_argument(
         "--gpu-noise-modes",
         nargs="+",
         choices=GPU_NOISE_MODES,
@@ -1259,6 +1287,7 @@ def main() -> None:
         priority=args.priority,
         use_lime=not args.no_lime,
         use_sudo=not args.no_sudo,
+        drop_caches_before_run=not args.no_drop_caches,
         rsusb_backend=args.rsusb_backend,
         rsusb_usb_devices=args.rsusb_usb_device,
         cpu_frequency_mhz=args.cpu_frequency_mhz or None,
