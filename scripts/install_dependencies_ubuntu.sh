@@ -293,7 +293,7 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
         -DFORCE_RSUSB_BACKEND="$RSUSB_BACKEND" \
         -DRS_CAMERA_BUILD_GPU_NOISE="$(if [ "$GPU_NOISE" -eq 1 ]; then printf ON; else printf OFF; fi)" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo
-    BUILD_TARGETS="d435_sensor_probe"
+    BUILD_TARGETS="d435_sensor_probe realsense_usb_storage_noise"
     if [ "$GPU_NOISE" -eq 1 ]; then
         BUILD_TARGETS="$BUILD_TARGETS realsense_gpu_noise"
     fi
@@ -321,6 +321,7 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
     echo "  LiME:   $REPO_ROOT/deps/lime-rtw/target/release/lime-rtw"
     echo "  Probe:  $BUILD_DIR/d435_sensor_probe"
     echo "  Tracer: $BUILD_DIR/libtrace_pthreads.so"
+    echo "  USB noise: $BUILD_DIR/realsense_usb_storage_noise"
     if [ "$GPU_NOISE" -eq 1 ]; then
         echo "  GPU noise: $BUILD_DIR/realsense_gpu_noise"
     fi

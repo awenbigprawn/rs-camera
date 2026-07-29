@@ -140,6 +140,50 @@ This creates twelve runs:
 The workload description and exact profiles are copied into `case.json` and
 flattened into the Benchkit result CSV.
 
+## Read-Only USB Storage Noise
+
+The `sequential_read` mode continuously reads an unmounted whole USB disk using
+1 MiB `O_DIRECT` requests and wraps at the end of the device. It is deliberately
+read-only: camera traffic and storage reads both flow device-to-host, while
+writes would add flash wear and garbage-collection variability.
+
+The runner performs safety checks before starting the campaign. The target must
+be a whole USB block device, no partition on it may be mounted, and a stable
+`/dev/disk/by-id/...` path is strongly recommended. After opening the device
+read-only with elevated permission, the workload drops back to the invoking
+UID/GID. It runs as `SCHED_OTHER`, reads for ten seconds before signalling ready,
+and records achieved throughput and read-latency statistics for every run.
+
+Run a paired five-minute read-noise comparison with GPU noise disabled:
+
+```sh
+sudo -v
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
+  --policies other rr \
+  --gpu-noise-modes none \
+  --usb-storage-noise-modes none sequential_read \
+  --usb-storage-device /dev/disk/by-id/usb-MODEL_SERIAL-0:0 \
+  --priority 80 \
+  --nb-runs 3 \
+  --serial CAMERA_SERIAL \
+  --cpu-frequency-mhz 1500 \
+  --results-dir tools/realsense_steady_bench/results/usb_read_noise_5min
+```
+
+This creates 24 runs:
+
+```text
+2 workloads x 2 policies x 2 USB-noise modes x 3 repetitions
+```
+
+Use `lsusb -t` and the recorded sysfs paths to verify topology. For shared-bus
+experiments, use a SuperSpeed storage device on the same powered USB 3 hub as
+the camera. A USB 2 device or a device on another xHCI controller does not
+create direct SuperSpeed-link contention and must be labelled accordingly.
+Optional controls are `--usb-storage-warmup-seconds`,
+`--usb-storage-block-size-kib`, and `--usb-storage-ready-timeout-seconds`.
+
 ## Selected GPU-Noise Workload
 
 The formal GPU-interference condition is `mobilenet_v2_vulkan`. It continuously
@@ -242,6 +286,12 @@ gpu_noise_summary.json
 gpu_noise_process.json
 gpu_noise_stdout.txt
 gpu_noise_stderr.txt
+usb_storage_noise_configuration.json
+usb_storage_noise_ready.json
+usb_storage_noise_summary.json
+usb_storage_noise_process.json
+usb_storage_noise_stdout.txt
+usb_storage_noise_stderr.txt
 thread_lifecycle.jsonl
 lime_trace/
 thread_steady_intervals.csv

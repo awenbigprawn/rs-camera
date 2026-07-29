@@ -38,6 +38,6 @@
     "policy": ["other", "rr", "fifo"],
     "delivery": ["wait", "callback"],
     "usb_topology": ["direct", "powered_hub_same_controller", "powered_hubs_two_ports"],
-    "noise": ["none", "cpu", "memory", "usb_storage", "network_irq"]
+    "noise": ["none", "cpu", "memory", "usb_storage_sequential_read", "network_irq"]
   }
 }

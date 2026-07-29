@@ -103,6 +103,12 @@ target_link_libraries(
         Threads::Threads
 )
 
+add_executable(
+    realsense_usb_storage_noise
+    src/realsense_usb_storage_noise.cpp
+)
+target_compile_features(realsense_usb_storage_noise PRIVATE cxx_std_17)
+
 if(RS_CAMERA_BUILD_GPU_NOISE)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/ncnn/CMakeLists.txt")
         message(

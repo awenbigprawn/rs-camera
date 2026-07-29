@@ -157,7 +157,7 @@ noise:
   none
   cpu_busy
   shi_tomasi
-  usb_storage_io
+  usb_storage_sequential_read
   gpu_mobilenet_v2_vulkan
 ```
 
@@ -447,21 +447,39 @@ provides a simpler scheduler-contention upper bound.
 
 ### 7.3 USB storage noise
 
-Use a dedicated test file on a USB storage device. Do not write directly over
-a filesystem or partition containing valuable data. Fix:
+Use the read-only `realsense_usb_storage_noise` workload on a dedicated,
+unmounted USB whole-disk device:
 
-- storage device and USB port;
-- whether it shares the camera xHCI controller;
-- read, write, or mixed workload;
-- sequential or random access;
-- block size;
-- queue depth;
-- direct-I/O setting;
-- measured bandwidth and I/O latency.
+```text
+access: read only
+pattern: sequential, wrapping at end of device
+I/O mode: O_DIRECT
+block size: 1024 KiB
+queue depth: 1
+process policy: SCHED_OTHER
+warm-up: 10 s of sustained reads before camera startup
+```
 
-The primary USB condition should use a time-based, sustained workload that
-starts before camera warm-up and continues until measurement completes. Start
-the noise before a startup attempt when studying startup interference.
+Sequential reads are the primary condition because both the D435 streams and
+storage reads transfer data from device to host. This targets the same receive
+direction without flash-program/erase wear. Writes are not part of the primary
+matrix: they exercise the opposite transfer direction, wear flash, and add
+flash-translation-layer garbage-collection variability. A write experiment is
+justified only as a separately labelled secondary study.
+
+Use a stable `/dev/disk/by-id/...` path and record the resolved block device,
+size, model, serial, USB path/controller, block size, achieved MiB/s, and read
+latency. The runner rejects partitions, mounted devices, and non-USB devices.
+The workload opens the disk `O_RDONLY`; it never issues writes or modifies the
+filesystem.
+
+For direct USB-bus contention, the storage device and camera must share the
+intended SuperSpeed controller/hub path. A USB 2.0 stick on a companion bus or a
+stick attached to a different Raspberry Pi xHCI controller is useful only as a
+weaker system-I/O/IRQ/DMA condition and must not be labelled shared-bus noise.
+Prefer a USB 3 storage device connected to the same powered USB 3 hub as the
+camera. Confirm placement from `lsusb -t` and sysfs rather than physical port
+labels alone.
 
 ### 7.4 MobileNetV2 Vulkan GPU noise
 
@@ -766,7 +784,7 @@ kernel: default, PREEMPT_RT
 camera_count: 1 and maximum feasible count
 policy: OTHER and the best real-time policy
 workload: representative, stress
-noise: none, cpu_busy, shi_tomasi, usb_storage_io, gpu_mobilenet_v2_vulkan
+noise: none, cpu_busy, shi_tomasi, usb_storage_sequential_read, gpu_mobilenet_v2_vulkan
 ```
 
 ### Stage F: long-run validation
