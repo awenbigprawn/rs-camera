@@ -12,7 +12,7 @@ on Intel RealSense cameras.
   merger.
 - tools/realsense_thread_trace/: pthread lifecycle tracer and visualization
   tools.
-- tools/realsense_usb_topology_bench/: USB topology/scaling campaign.
+- tools/realsense_steady_bench/: steady-state frame, thread, and USB scaling campaign.
 - deps/: pinned librealsense, LiME, and Benchkit dependencies.
 
 ## Build
@@ -63,7 +63,7 @@ By default the project builds against the vendored librealsense source:
       smallest_test \
       d435_sensor_probe \
       realsense_thread_lifecycle_probe \
-      realsense_usb_latency_probe \
+      realsense_steady_probe \
       -j4
 
 To use an installed librealsense package:
@@ -118,8 +118,21 @@ Important options:
 ### Other probes
 
 - realsense_thread_lifecycle_probe: one longer phase-marked trace workload.
-- realsense_usb_latency_probe: frame/drop/interarrival workload used by the USB
-  topology benchmark.
+- realsense_steady_probe: one pipeline per camera with raw steady-state frame,
+  loss, inter-arrival, and phase-marker output.
+
+## Steady-state timing campaign
+
+See tools/realsense_steady_bench/README.md. It starts one pipeline per selected
+camera, waits for every camera to warm up, and then traces an aligned global
+steady-state window with LiME and the pthread lifecycle helper. A short run is:
+
+    .venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+      --case one_camera_all_streams_wait \
+      --policies other \
+      --frames 1000 \
+      --serial CAMERA_SERIAL \
+      --nb-runs 1
 
 ## Startup timing campaign
 

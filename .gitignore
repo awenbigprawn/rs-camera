@@ -89,3 +89,6 @@ __pycache__/
 
 # Local research notes and generated documentation
 /docu/
+
+# Generated steady-state benchmark data
+/tools/realsense_steady_bench/results/

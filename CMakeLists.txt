@@ -45,12 +45,12 @@ endif()
 add_executable(smallest_test src/smallest_test.cpp)
 add_executable(d435_sensor_probe src/d435_sensor_probe.cpp)
 add_executable(realsense_thread_lifecycle_probe src/realsense_thread_lifecycle_probe.cpp)
-add_executable(realsense_usb_latency_probe src/realsense_usb_latency_probe.cpp)
+add_executable(realsense_steady_probe src/realsense_steady_probe.cpp)
 
 target_compile_features(smallest_test PRIVATE cxx_std_17)
 target_compile_features(d435_sensor_probe PRIVATE cxx_std_17)
 target_compile_features(realsense_thread_lifecycle_probe PRIVATE cxx_std_17)
-target_compile_features(realsense_usb_latency_probe PRIVATE cxx_std_17)
+target_compile_features(realsense_steady_probe PRIVATE cxx_std_17)
 
 target_include_directories(
     smallest_test
@@ -68,7 +68,7 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 target_include_directories(
-    realsense_usb_latency_probe
+    realsense_steady_probe
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
@@ -92,7 +92,7 @@ target_link_libraries(
         Threads::Threads
 )
 target_link_libraries(
-    realsense_usb_latency_probe
+    realsense_steady_probe
     PRIVATE
         "${RS_CAMERA_LIBREALSENSE_TARGET}"
         Threads::Threads

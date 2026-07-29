@@ -1,0 +1,43 @@
+{
+  "description": "Template for long RTNS steady-state experiments. Copy it and retain only physically verified cases.",
+  "notes": [
+    "List serials in probe.serials when more than one camera is connected.",
+    "The physical labels are evidence annotations; topology_before.json and topology_after.json verify the setup.",
+    "Run scheduling policies in separate randomized campaign orders when collecting paper data.",
+    "Add noise as a separately controlled experiment factor, not as an unrecorded background process."
+  ],
+  "cases": [
+    {
+      "case_id": "one_camera_direct_all_streams",
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "direct",
+        "root_hub_label": "record_from_lsusb_tree",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": [],
+        "stream_mode": "d435_all",
+        "delivery": "wait",
+        "frames": 18000,
+        "warmup_frames": 60,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    }
+  ],
+  "planned_factors": {
+    "camera_count": [1, 2, 3, 4],
+    "kernel": ["linux_non_rt", "linux_preempt_rt"],
+    "policy": ["other", "rr", "fifo"],
+    "delivery": ["wait", "callback"],
+    "usb_topology": ["direct", "powered_hub_same_controller", "powered_hubs_two_ports"],
+    "noise": ["none", "cpu", "memory", "usb_storage", "network_irq"]
+  }
+}

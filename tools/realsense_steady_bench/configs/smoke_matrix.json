@@ -1,0 +1,51 @@
+{
+  "description": "Short functional cases for one connected D435. Use --frames to shorten or extend them.",
+  "cases": [
+    {
+      "case_id": "one_camera_all_streams_wait",
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "current",
+        "root_hub_label": "current",
+        "usb_speed_label": "current"
+      },
+      "probe": {
+        "camera_count": 1,
+        "stream_mode": "d435_all",
+        "delivery": "wait",
+        "frames": 300,
+        "warmup_frames": 30,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "one_camera_all_streams_callback",
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "current",
+        "root_hub_label": "current",
+        "usb_speed_label": "current"
+      },
+      "probe": {
+        "camera_count": 1,
+        "stream_mode": "d435_all",
+        "delivery": "callback",
+        "frames": 300,
+        "warmup_frames": 30,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    }
+  ]
+}
