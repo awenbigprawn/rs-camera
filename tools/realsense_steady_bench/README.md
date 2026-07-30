@@ -16,9 +16,22 @@ and then records the same number of frame deliveries from every camera.
 | Operational inputs | camera serials, CPU/memory-noise worker counts and affinity, memory buffer size, frame override, repetitions, build jobs, and output path |
 | Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, and RT priority 80 |
 
-Fixed controls are declared near the top of `run_steady_campaign.py` and are
-copied into the Benchkit CSV and per-run manifest. They are intentionally not
-command-line factors.
+Fixed controls are declared in `steady_settings.py` and are copied into the
+Benchkit CSV and per-run manifest. They are intentionally not command-line
+factors.
+
+## Python module layout
+
+The campaign runner is split by responsibility:
+
+- `run_steady_campaign.py` parses CLI arguments, selects cases, and constructs
+  the Benchkit Cartesian-product campaign;
+- `steady_benchmark.py` adapts one steady-state run to Benchkit;
+- `noise_workloads.py` owns CPU, memory, USB-storage, and GPU noise processes;
+- `system_controls.py` owns CPU-frequency, backend-binding, topology, and
+  kernel-log state;
+- `steady_results.py` assembles the per-run Benchkit result row;
+- `steady_settings.py` contains shared paths, fixed controls, and factor names.
 
 ## Measurements
 

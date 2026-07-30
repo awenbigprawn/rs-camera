@@ -17,7 +17,7 @@ SOURCE = REPO_ROOT / "src" / "realsense_memory_noise.cpp"
 TOOL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_DIR))
 
-from run_steady_campaign import RealSenseSteadyBench  # noqa: E402
+from noise_workloads import FixedCopyMemoryNoise, MemoryNoiseConfig  # noqa: E402
 
 
 class MemoryNoiseWorkloadTests(unittest.TestCase):
@@ -115,22 +115,26 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
     def test_runner_starts_waits_for_and_stops_memory_noise(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            bench = object.__new__(RealSenseSteadyBench)
-            bench._memory_noise = self.binary
-            bench._memory_noise_workers = 2
-            bench._memory_noise_buffer_size_mib = 4
-            bench._memory_noise_warmup_seconds = 0.05
-            bench._memory_noise_ready_timeout_seconds = 5.0
-            bench._memory_noise_cpu_affinity = None
-            bench._memory_noise_process = None
+            noise = FixedCopyMemoryNoise(
+                MemoryNoiseConfig(
+                    executable=self.binary,
+                    modes=("fixed_copy",),
+                    workers=2,
+                    buffer_size_mib=4,
+                    warmup_seconds=0.05,
+                    ready_timeout_seconds=5.0,
+                    cpu_affinity=None,
+                ),
+                REPO_ROOT,
+            )
             try:
-                ready = bench._start_memory_noise("fixed_copy", root)
+                ready = noise.start("fixed_copy", root)
                 self.assertTrue(ready["ready"])
                 self.assertEqual(ready["workers"], 2)
                 time.sleep(0.05)
-                bench._stop_memory_noise(root)
+                noise.stop(root)
             finally:
-                bench._stop_memory_noise(root)
+                noise.stop(root)
 
             process = json.loads(
                 (root / "memory_noise_process.json").read_text(encoding="utf-8")

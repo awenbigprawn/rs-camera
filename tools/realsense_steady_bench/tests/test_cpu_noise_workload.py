@@ -17,7 +17,7 @@ SOURCE = REPO_ROOT / "src" / "realsense_cpu_noise.cpp"
 TOOL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_DIR))
 
-from run_steady_campaign import RealSenseSteadyBench  # noqa: E402
+from noise_workloads import CpuBusyLoopNoise, CpuNoiseConfig  # noqa: E402
 
 
 class CpuNoiseWorkloadTests(unittest.TestCase):
@@ -106,21 +106,25 @@ class CpuNoiseWorkloadTests(unittest.TestCase):
     def test_runner_starts_waits_for_and_stops_cpu_noise(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            bench = object.__new__(RealSenseSteadyBench)
-            bench._cpu_noise = self.binary
-            bench._cpu_noise_workers = 2
-            bench._cpu_noise_warmup_seconds = 0.05
-            bench._cpu_noise_ready_timeout_seconds = 5.0
-            bench._cpu_noise_cpu_affinity = None
-            bench._cpu_noise_process = None
+            noise = CpuBusyLoopNoise(
+                CpuNoiseConfig(
+                    executable=self.binary,
+                    modes=("busy_loop",),
+                    workers=2,
+                    warmup_seconds=0.05,
+                    ready_timeout_seconds=5.0,
+                    cpu_affinity=None,
+                ),
+                REPO_ROOT,
+            )
             try:
-                ready = bench._start_cpu_noise("busy_loop", root)
+                ready = noise.start("busy_loop", root)
                 self.assertTrue(ready["ready"])
                 self.assertEqual(ready["workers"], 2)
                 time.sleep(0.05)
-                bench._stop_cpu_noise(root)
+                noise.stop(root)
             finally:
-                bench._stop_cpu_noise(root)
+                noise.stop(root)
 
             process = json.loads(
                 (root / "cpu_noise_process.json").read_text(encoding="utf-8")
