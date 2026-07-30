@@ -8,6 +8,18 @@ The new probe creates one `rs2::pipeline` per selected camera, waits until every
 camera has completed its warm-up, emits one global `steady_state_begin` marker,
 and then records the same number of frame deliveries from every camera.
 
+## Campaign factors and fixed controls
+
+| Role | Setting |
+| --- | --- |
+| Cartesian factors | workload case, scheduling policy, CPU-noise mode, GPU-noise mode, and USB-storage-noise mode |
+| Operational inputs | camera serials, CPU-noise worker count/affinity, frame override, repetitions, build jobs, and output path |
+| Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, and RT priority 80 |
+
+Fixed controls are declared near the top of `run_steady_campaign.py` and are
+copied into the Benchkit CSV and per-run manifest. They are intentionally not
+command-line factors.
+
 ## Measurements
 
 The probe writes:
@@ -76,24 +88,24 @@ sudo -v
 .venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
   --case one_camera_all_streams_wait \
   --policies other rr fifo \
-  --priority 80 \
   --frames 300 \
   --nb-runs 1 \
   --serial CAMERA_SERIAL \
   --results-dir tools/realsense_steady_bench/results/smoke
 ```
 
-The runner locks CPU frequency once before the first run (1500 MHz by default)
-and restores dynamic scaling after the entire campaign, including interrupted
-campaigns. Disable locking with `--cpu-frequency-mhz 0`.
+The runner locks CPU frequency once before the first run and restores dynamic
+scaling after the entire campaign, including interrupted campaigns. The paper
+campaign fixes `CAMPAIGN_CPU_FREQUENCY_MHZ = 1500` and
+`CAMPAIGN_RT_PRIORITY = 80` near the top of the runner; neither is a Cartesian
+factor or CLI override.
 
 Before every logical Benchkit run, the runner also executes `sync` and writes
 `3` to `/proc/sys/vm/drop_caches`. This establishes a cold Linux page cache and
 reclaims dentries and inodes before noise warm-up or camera startup; anonymous
 memory and swap are not cleared. The operation runs once per repetition and is
 recorded in `memory_cleanup_before_run.json` and the campaign CSV. Run `sudo -v`
-before the campaign. Use `--no-drop-caches` only for debugging or a separately
-labelled warm-cache condition.
+before the campaign. Cache cleanup is a fixed paper-campaign control.
 
 Use `--no-lime` only for functional debugging. It keeps the pthread lifecycle
 trace but cannot produce scheduler execution-time distributions.
@@ -109,7 +121,6 @@ For a ten-minute, 30-frame/s acquisition:
   --frames 18000 \
   --nb-runs 5 \
   --serial CAMERA_SERIAL \
-  --cpu-frequency-mhz 1500 \
   --results-dir tools/realsense_steady_bench/results/one_camera_10min
 ```
 
@@ -132,10 +143,8 @@ sudo -v
 .venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
   --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
   --policies other rr \
-  --priority 80 \
   --nb-runs 3 \
   --serial CAMERA_SERIAL \
-  --cpu-frequency-mhz 1500 \
   --results-dir tools/realsense_steady_bench/results/parameter_exploration_5min
 ```
 
@@ -147,6 +156,55 @@ This creates twelve runs:
 
 The workload description and exact profiles are copied into `case.json` and
 flattened into the Benchkit result CSV.
+
+## Register-Only CPU Busy-Loop Noise
+
+The `busy_loop` condition launches a `SCHED_OTHER` process containing a
+configurable number of worker threads. Each worker repeatedly applies dependent
+integer operations to a thread-private register value. The hot loop performs no
+allocation, array traversal, `memcpy`, file access, system call, or shared-memory
+update. It checks one signal flag per 4096 operations and writes its counters
+only after termination. This makes the workload primarily compete for CPU
+execution time and scheduler service while minimizing cache, memory-bandwidth,
+I/O, and USB/DMA effects.
+
+Set the worker count once per campaign with `--cpu-noise-workers N`. Increasing
+the count occupies more logical CPUs until the selected affinity mask is
+saturated. Counts above the number of available CPUs increase runnable-task
+contention but cannot increase physical CPU execution throughput. Use
+`--cpu-noise-cpu-affinity` to co-locate the workers with the camera and
+librealsense threads.
+
+A Raspberry Pi 5 dose-response pilot can run separate campaigns with 1, 2, 3,
+and 4 workers. The formal matrix should then use one selected count rather than
+turning worker count into another Cartesian factor. For example, the paired
+four-worker experiment is:
+
+```sh
+sudo -v
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
+  --policies other rr \
+  --cpu-noise-modes none busy_loop \
+  --cpu-noise-workers 4 \
+  --gpu-noise-modes none \
+  --usb-storage-noise-modes none \
+  --nb-runs 3 \
+  --serial CAMERA_SERIAL \
+  --results-dir tools/realsense_steady_bench/results/cpu_busy_4workers_5min
+```
+
+This creates 24 runs:
+
+```text
+2 workloads x 2 policies x 2 CPU-noise modes x 3 repetitions
+```
+
+The workload warms up for ten seconds before camera startup. Each record reports
+aggregate process CPU time, CPU equivalents (`process CPU time / wall time`),
+normalized worker utilization, completed register-loop iterations, start/stop
+timestamps, worker count, and affinity. Optional timing controls are
+`--cpu-noise-warmup-seconds` and `--cpu-noise-ready-timeout-seconds`.
 
 ## Read-Only USB Storage Noise
 
@@ -172,10 +230,8 @@ sudo -v
   --gpu-noise-modes none \
   --usb-storage-noise-modes none sequential_read \
   --usb-storage-device /dev/disk/by-id/usb-MODEL_SERIAL-0:0 \
-  --priority 80 \
   --nb-runs 3 \
   --serial CAMERA_SERIAL \
-  --cpu-frequency-mhz 1500 \
   --results-dir tools/realsense_steady_bench/results/usb_read_noise_5min
 ```
 
@@ -221,10 +277,8 @@ Run a paired five-minute comparison for both workloads and two policies:
   --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
   --policies other rr \
   --gpu-noise-modes none mobilenet_v2_vulkan \
-  --priority 80 \
   --nb-runs 3 \
   --serial CAMERA_SERIAL \
-  --cpu-frequency-mhz 1500 \
   --results-dir tools/realsense_steady_bench/results/gpu_noise_5min
 ```
 
@@ -258,22 +312,14 @@ Command-line serials override the case configuration and set `camera_count`
 accordingly. Keep physical hub/controller labels in a copied JSON configuration
 so that the result CSV identifies the actual setup.
 
-## RSUSB Backend
+## Retained RSUSB support
 
-V4L2 is the default and should be used for comparable laptop/Raspberry Pi
-experiments. RSUSB remains available:
-
-```sh
-.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
-  --rsusb-backend \
-  --rsusb-usb-device 3-1 \
-  --case one_camera_all_streams_wait \
-  --serial CAMERA_SERIAL
-```
-
-For multiple RSUSB cameras, repeat both `--serial` and
-`--rsusb-usb-device`. The runner unbinds UVC interfaces once before the
-campaign and rebinds them during cleanup.
+RSUSB build and UVC unbind/rebind support remains in the codebase for separate
+backend validation. It is not used by the paper campaign, which fixes
+`CAMPAIGN_BACKEND = "v4l2"` and uses the kernel `uvcvideo` driver. Any RSUSB
+validation must change the explicit constants in the runner and use a separate
+build and results directory; backend results must never be mixed in one
+campaign.
 
 ## Result Layout
 
@@ -289,6 +335,12 @@ steady_summary.json
 kernel_log.txt
 frame_events.csv
 probe_stdout.txt
+cpu_noise_configuration.json
+cpu_noise_ready.json
+cpu_noise_summary.json
+cpu_noise_process.json
+cpu_noise_stdout.txt
+cpu_noise_stderr.txt
 gpu_noise_configuration.json
 gpu_noise_ready.json
 gpu_noise_summary.json

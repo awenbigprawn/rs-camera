@@ -34,16 +34,11 @@ separate build directory and the RSUSB/libusb backend:
       --rsusb-backend \
       --build-dir build-realsense-rsusb
 
-For a Benchkit RSUSB campaign, pass the camera's USB sysfs name so UVC is
-unbound before every measured attempt (the name below is an example):
-
-    --rsusb-usb-device 3-1
-
-The campaign repeats the unbind because device recovery or re-enumeration can
-reattach `uvcvideo`. After a successful campaign or an ordinary interruption,
-it binds the interfaces back to `uvcvideo` so a later V4L2 run can use the
-camera. The standalone helper remains available for non-campaign probes and
-recovery after an uncatchable termination such as `SIGKILL`:
+RSUSB build and unbind/rebind support remains available for standalone backend
+diagnostics, but the paper-oriented Benchkit campaigns fix the backend to V4L2
+with the kernel `uvcvideo` driver. RSUSB validation must use a separate build
+and result set. The standalone helper can prepare a diagnostic probe and recover
+after an uncatchable termination such as `SIGKILL`:
 
     sudo ./scripts/realsense_rsusb_uvc.sh unbind 3-1
     # Run one RSUSB probe.
@@ -134,27 +129,23 @@ steady-state window with LiME and the pthread lifecycle helper. A short run is:
       --serial CAMERA_SERIAL \
       --nb-runs 1
 
+The steady campaign also provides a register-only CPU busy-loop condition.
+Select it with `--cpu-noise-modes none busy_loop` and set its fixed per-campaign
+intensity with `--cpu-noise-workers N`.
+
 ## Startup timing campaign
 
 See tools/realsense_startup_bench/README.md. The standard paper-oriented run is:
 
     python3 tools/realsense_startup_bench/run_startup_campaign.py \
       --policies other rr fifo \
-      --priority 80 \
       --cycles 10 \
       --frames 10 \
       --nb-runs 3
 
-Use the matching backend and build directory for a Raspberry Pi RSUSB run:
-
-    python3 tools/realsense_startup_bench/run_startup_campaign.py \
-      --rsusb-backend \
-      --rsusb-usb-device 3-1 \
-      --build-dir build-realsense-rsusb \
-      --policies other \
-      --cycles 2 \
-      --frames 3 \
-      --nb-runs 1
+The paper campaigns fix CPU frequency at 1500 MHz, drop filesystem caches before
+each logical run, use RT priority 80, and use the V4L2/uvcvideo backend. These
+controls are recorded as Benchkit constants rather than exposed as factors.
 
 LiME/eBPF supplies the authoritative scheduler timestamps. The approved
 LD_PRELOAD helper adds pthread create/start/join/exit labels. Python merges both

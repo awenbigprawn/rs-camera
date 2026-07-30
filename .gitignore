@@ -77,6 +77,7 @@ __pycache__/
 
 # Local editor configuration
 /.vscode/
+.idea/
 
 # Locally saved LiME documentation
 /lime-Command-line-Usage.html

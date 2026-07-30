@@ -24,6 +24,26 @@ CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
 CPU_FREQ_LOCK_SCRIPT = REPO_ROOT / "scripts" / "lock_cpu_freq.sh"
 CPU_FREQ_RESTORE_SCRIPT = REPO_ROOT / "scripts" / "restore_cpu_freq_default.sh"
 
+# Fixed controls for the paper campaign. These are recorded as Benchkit
+# constants and in each run manifest, but are not experimental factors.
+CAMPAIGN_BACKEND = "v4l2"
+CAMPAIGN_USB_KERNEL_DRIVER = "uvcvideo"
+CAMPAIGN_CPU_FREQUENCY_MHZ = 1500
+CAMPAIGN_DROP_CACHES_BEFORE_RUN = True
+CAMPAIGN_RT_PRIORITY = 80
+CAMPAIGN_CYCLE_DELAY_MS = 0
+CAMPAIGN_RSUSB_USB_DEVICE = ""
+CAMPAIGN_RSUSB_PREPARE_TIMEOUT_SECONDS = 10.0
+CAMPAIGN_RSUSB_UNBIND_SETTLE_SECONDS = 1.0
+FIXED_CAMPAIGN_CONSTANTS = {
+    "fixed_librealsense_backend": CAMPAIGN_BACKEND,
+    "fixed_usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
+    "fixed_cpu_frequency_mhz": CAMPAIGN_CPU_FREQUENCY_MHZ,
+    "fixed_drop_caches_before_run": CAMPAIGN_DROP_CACHES_BEFORE_RUN,
+    "fixed_rt_priority": CAMPAIGN_RT_PRIORITY,
+    "fixed_cycle_delay_ms": CAMPAIGN_CYCLE_DELAY_MS,
+}
+
 if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize the repository submodules first.")
 sys.path.insert(0, str(BENCHKIT_PATH))
@@ -59,7 +79,6 @@ class RealSenseStartupBench(Benchmark):
         lime: Path,
         cycles: int,
         frames: int,
-        priority: int,
         serial: str,
         frame_timeout_ms: int,
         join_timeout_ms: int,
@@ -69,12 +88,6 @@ class RealSenseStartupBench(Benchmark):
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
         max_attempts_per_run: int,
-        rsusb_backend: bool,
-        rsusb_usb_device: str,
-        rsusb_prepare_timeout_seconds: float,
-        rsusb_unbind_settle_seconds: float,
-        cpu_frequency_mhz: int | None,
-        drop_caches_before_run: bool,
         use_sudo: bool,
     ) -> None:
         memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
@@ -82,14 +95,18 @@ class RealSenseStartupBench(Benchmark):
             command_wrappers=(),
             command_attachments=(),
             shared_libs=(),
-            pre_run_hooks=(memory_cleanup_hook,) if drop_caches_before_run else (),
+            pre_run_hooks=(
+                (memory_cleanup_hook,)
+                if CAMPAIGN_DROP_CACHES_BEFORE_RUN
+                else ()
+            ),
             post_run_hooks=(),
         )
         self._build_dir = build_dir.resolve()
         self._lime = lime.resolve()
         self._cycles = cycles
         self._frames = frames
-        self._priority = priority
+        self._priority = CAMPAIGN_RT_PRIORITY
         self._serial = serial
         self._frame_timeout_ms = frame_timeout_ms
         self._join_timeout_ms = join_timeout_ms
@@ -100,12 +117,12 @@ class RealSenseStartupBench(Benchmark):
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
         self._use_sudo = use_sudo
-        self._rsusb_backend = rsusb_backend
-        self._rsusb_usb_device = rsusb_usb_device
-        self._rsusb_prepare_timeout_seconds = rsusb_prepare_timeout_seconds
-        self._rsusb_unbind_settle_seconds = rsusb_unbind_settle_seconds
-        self._cpu_frequency_mhz = cpu_frequency_mhz
-        self._drop_caches_before_run = drop_caches_before_run
+        self._rsusb_backend = CAMPAIGN_BACKEND == "rsusb"
+        self._rsusb_usb_device = CAMPAIGN_RSUSB_USB_DEVICE
+        self._rsusb_prepare_timeout_seconds = CAMPAIGN_RSUSB_PREPARE_TIMEOUT_SECONDS
+        self._rsusb_unbind_settle_seconds = CAMPAIGN_RSUSB_UNBIND_SETTLE_SECONDS
+        self._cpu_frequency_mhz = CAMPAIGN_CPU_FREQUENCY_MHZ
+        self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
         self._cpu_frequency_original_state: Dict[str, Any] | None = None
         self._cpu_frequency_locked = False
@@ -123,7 +140,7 @@ class RealSenseStartupBench(Benchmark):
 
     @staticmethod
     def get_run_var_names() -> List[str]:
-        return ["policy", "cycle_delay_ms"]
+        return ["policy"]
 
     def prebuild_bench(self, **_kwargs: Any) -> int:
         if not self._lime.is_file():
@@ -800,11 +817,10 @@ class RealSenseStartupBench(Benchmark):
     def single_run(
         self,
         policy: str,
-        cycle_delay_ms: int,
         record_data_dir: Path,
         **kwargs: Any,
     ) -> str:
-        cycle_delay_ms = int(cycle_delay_ms)
+        cycle_delay_ms = CAMPAIGN_CYCLE_DELAY_MS
         record_dir = Path(record_data_dir).resolve()
         record_dir.mkdir(parents=True, exist_ok=True)
         if any(record_dir.glob("attempt-*")):
@@ -819,6 +835,8 @@ class RealSenseStartupBench(Benchmark):
             "schema_version": 5,
             "policy_requested": POLICY_NAMES[policy],
             "priority_requested": 0 if policy == "other" else self._priority,
+            "librealsense_backend": CAMPAIGN_BACKEND,
+            "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
             "cycles": self._cycles,
             "frames_per_cycle": self._frames,
             "frame_timeout_ms": self._frame_timeout_ms,
@@ -1103,11 +1121,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Trace repeated D435 startup/frame/shutdown cycles with LiME/eBPF, "
-            "sweep the post-shutdown quiescence delay, and aggregate with Benchkit."
+            "and aggregate scheduling-policy comparisons with Benchkit."
         )
     )
     parser.add_argument("--policies", nargs="+", choices=sorted(POLICY_NAMES), default=["other", "rr", "fifo"])
-    parser.add_argument("--priority", type=int, default=80, help="SCHED_RR/FIFO priority (1-99).")
     parser.add_argument("--cycles", type=int, default=10)
     parser.add_argument("--frames", type=int, default=10)
     parser.add_argument("--serial", default="")
@@ -1137,13 +1154,6 @@ def main() -> None:
             "D435 firmware reconnect timeout during full-reset recovery "
             "(default: 5000 ms)."
         ),
-    )
-    parser.add_argument(
-        "--cycle-delays-ms",
-        nargs="+",
-        type=int,
-        default=[0],
-        help="Post-destruction quiescence delays to sweep between cycles (default: 0).",
     )
     parser.add_argument(
         "--recover-on-failure",
@@ -1177,62 +1187,12 @@ def main() -> None:
     )
     parser.add_argument("--nb-runs", type=int, default=1)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
-    parser.add_argument(
-        "--rsusb-backend",
-        action="store_true",
-        help=(
-            "Build vendored librealsense with its libusb backend; use a separate "
-            "build directory and treat it as a distinct experiment."
-        ),
-    )
-    parser.add_argument(
-        "--rsusb-usb-device",
-        default="",
-        help=(
-            "USB sysfs device name (for example 3-1) whose UVC interfaces are "
-            "unbound before every RSUSB attempt."
-        ),
-    )
-    parser.add_argument(
-        "--rsusb-prepare-timeout-seconds",
-        type=float,
-        default=10.0,
-        help="Maximum wait for a stable per-attempt UVC unbind (default: 10 seconds).",
-    )
-    parser.add_argument(
-        "--rsusb-unbind-settle-seconds",
-        type=float,
-        default=1.0,
-        help="Quiescence delay after per-attempt UVC unbind (default: 1 second).",
-    )
-    parser.add_argument(
-        "--cpu-frequency-mhz",
-        type=int,
-        default=1500,
-        help=(
-            "Lock all CPU-frequency policies once before the first measured run "
-            "and restore the pre-campaign state after all runs (default: 1500 MHz)."
-        ),
-    )
-    parser.add_argument(
-        "--no-cpu-frequency-lock",
-        action="store_true",
-        help="Leave CPU DVFS settings unchanged.",
-    )
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument(
         "--no-sudo",
         action="store_true",
         help="Do not add sudo when not root (LiME/eBPF and RT policies will then require capabilities).",
-    )
-    parser.add_argument(
-        "--no-drop-caches",
-        action="store_true",
-        help=(
-            "Do not sync and drop Linux page cache, dentries, and inodes before "
-            "each logical Benchkit run."
-        ),
     )
     args = parser.parse_args()
 
@@ -1242,8 +1202,6 @@ def main() -> None:
             "Install the Benchkit environment (this pinned revision also needs numpy)."
         )
 
-    if not 1 <= args.priority <= 99:
-        parser.error("--priority must be in [1, 99]")
     if (
         args.cycles < 1
         or args.frames < 1
@@ -1258,8 +1216,6 @@ def main() -> None:
         )
     if args.join_timeout_ms < 0:
         parser.error("--join-timeout-ms must be non-negative")
-    if any(delay < 0 for delay in args.cycle_delays_ms):
-        parser.error("--cycle-delays-ms values must be non-negative")
     if args.recovery_wait_seconds <= 0:
         parser.error("--recovery-wait-seconds must be positive")
     if args.recovery_settle_seconds < 0:
@@ -1268,14 +1224,6 @@ def main() -> None:
         parser.error("--max-attempts-per-run must be positive")
     if args.max_attempts_per_run > 1 and args.recover_on_failure == "none":
         parser.error("multiple attempts require --recover-on-failure")
-    if args.rsusb_usb_device and not args.rsusb_backend:
-        parser.error("--rsusb-usb-device requires --rsusb-backend")
-    if args.rsusb_prepare_timeout_seconds <= 0:
-        parser.error("--rsusb-prepare-timeout-seconds must be positive")
-    if args.rsusb_unbind_settle_seconds < 0:
-        parser.error("--rsusb-unbind-settle-seconds must be non-negative")
-    if args.cpu_frequency_mhz < 1:
-        parser.error("--cpu-frequency-mhz must be positive")
 
     use_sudo = os.geteuid() != 0 and not args.no_sudo
     args.results_dir.mkdir(parents=True, exist_ok=True)
@@ -1284,7 +1232,6 @@ def main() -> None:
         lime=args.lime,
         cycles=args.cycles,
         frames=args.frames,
-        priority=args.priority,
         serial=args.serial,
         frame_timeout_ms=args.frame_timeout_ms,
         join_timeout_ms=args.join_timeout_ms,
@@ -1294,22 +1241,14 @@ def main() -> None:
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,
         max_attempts_per_run=args.max_attempts_per_run,
-        rsusb_backend=args.rsusb_backend,
-        rsusb_usb_device=args.rsusb_usb_device,
-        rsusb_prepare_timeout_seconds=args.rsusb_prepare_timeout_seconds,
-        rsusb_unbind_settle_seconds=args.rsusb_unbind_settle_seconds,
-        cpu_frequency_mhz=(
-            None if args.no_cpu_frequency_lock else args.cpu_frequency_mhz
-        ),
-        drop_caches_before_run=not args.no_drop_caches,
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(
         name="realsense_startup",
         benchmark=benchmark,
         nb_runs=args.nb_runs,
-        variables={"policy": args.policies, "cycle_delay_ms": args.cycle_delays_ms},
-        constants=None,
+        variables={"policy": args.policies},
+        constants=FIXED_CAMPAIGN_CONSTANTS,
         debug=False,
         gdb=False,
         enable_data_dir=True,

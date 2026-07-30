@@ -150,7 +150,6 @@ class RetryStartupRunTest(unittest.TestCase):
 
             output = bench.single_run(
                 policy="other",
-                cycle_delay_ms=500,
                 record_data_dir=root,
             )
 

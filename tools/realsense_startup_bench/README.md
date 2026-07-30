@@ -14,6 +14,18 @@ The workload is src/d435_sensor_probe.cpp. It is scheduling-policy neutral. The
 campaign applies SCHED_OTHER, SCHED_RR, or SCHED_FIFO externally with chrt, so
 the main thread and normally-created child threads inherit the selected policy.
 
+## Campaign factors and fixed controls
+
+| Role | Setting |
+| --- | --- |
+| Cartesian factor | scheduling policy (`other`, `rr`, or `fifo`) |
+| Operational inputs | camera serial, cycles, frames, repetitions, timeouts, and output path |
+| Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, RT priority 80, and 0 ms cycle delay |
+
+Fixed controls are declared near the top of `run_startup_campaign.py` and are
+copied into the Benchkit CSV and per-run manifest. They are intentionally not
+command-line factors.
+
 ## Why two traces?
 
 LiME's existing eBPF tracer is authoritative for timing. Its scheduler events
@@ -47,18 +59,19 @@ other process owns it.
 ## CPU-frequency control
 
 The campaign locks every cpufreq policy once, immediately before the first
-measured run, and keeps that setting for the complete campaign. The default is
-1500 MHz. It invokes `scripts/lock_cpu_freq.sh` only once; subsequent runs
-verify the lock without rewriting sysfs. After all runs, or after an ordinary
-error or `Ctrl+C`, cleanup invokes `scripts/restore_cpu_freq_default.sh` and
-then reapplies the exact min/max/governor state captured before the lock. An
-uncatchable termination such as `SIGKILL` still requires manual restoration.
+measured run, and keeps that setting for the complete campaign. The paper
+campaign frequency is fixed by `CAMPAIGN_CPU_FREQUENCY_MHZ = 1500` near the top
+of `run_startup_campaign.py`. It invokes `scripts/lock_cpu_freq.sh` only once;
+subsequent runs verify the lock without rewriting sysfs. After all runs, or
+after an ordinary error or `Ctrl+C`, cleanup invokes
+`scripts/restore_cpu_freq_default.sh` and then reapplies the exact
+min/max/governor state captured before the lock. An uncatchable termination
+such as `SIGKILL` still requires manual restoration.
 
-Use another controlled frequency with `--cpu-frequency-mhz MHZ`. Only an
-explicit DVFS experiment should use `--no-cpu-frequency-lock`. Each run records
-its before/after cpufreq state and temperature in JSON and in the campaign CSV.
-Run `sudo -v` before starting so the one-time lock and final restore can run
-non-interactively.
+CPU frequency is a fixed platform control, not a Cartesian variable or CLI
+override. Each run records its before/after cpufreq state and temperature in
+JSON and in the campaign CSV. Run `sudo -v` before starting so the one-time lock
+and final restore can run non-interactively.
 
 ## Per-run filesystem-cache control
 
@@ -72,8 +85,8 @@ The hook runs once per Benchkit repetition, not once per camera cycle or failed
 recovery attempt. Each run records the operation, duration, and selected
 `/proc/meminfo` values in `memory_cleanup_before_run.json`; the same status and
 memory fields are copied to the campaign CSV. Run `sudo -v` before the campaign
-so the privileged write can remain non-interactive. Use `--no-drop-caches` only
-for functional debugging or an explicitly labelled warm-cache experiment.
+so the privileged write can remain non-interactive. Cache cleanup is a fixed
+paper-campaign control rather than an experimental variable.
 
 ## Run
 
@@ -81,34 +94,17 @@ From the repository root:
 
     .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
       --policies other rr fifo \
-      --priority 80 \
-      --cpu-frequency-mhz 1500 \
       --cycles 10 \
       --frames 10 \
       --nb-runs 3
 
-To measure the UVC teardown/restart sensitivity first, keep the scheduler fixed
-and sweep the quiescence delay between complete stop/destroy/join and the next
-camera construction:
-
-    .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
-      --policies other \
-      --cycle-delays-ms 0 10 50 100 250 500 1000 \
-      --recover-on-failure full-reset \
-      --max-attempts-per-run 3 \
-      --priority 80 \
-      --cycles 10 \
-      --frames 10 \
-      --nb-runs 3 \
-      --serial 327122075717 \
-      --build-dir build-realsense-thread-trace \
-      --results-dir tools/realsense_startup_bench/results/startup_delay_sweep
-
-This is 21 logical runs and a nominal 210 successful start/stop cycles, plus
-any preserved failed attempts. Run this SCHED_OTHER sweep before comparing RT
-policies. The smallest delay with no failures across enough
-repetitions can then be used as the controlled quiescence delay for the policy
-experiment. Keep the zero-delay condition as a separate lifecycle stress test.
+The post-destruction quiescence delay is fixed by
+`CAMPAIGN_CYCLE_DELAY_MS = 0` near the top of the runner. It is recorded as a
+Benchkit constant and in every run manifest, but is not part of the policy
+Cartesian product. Use `calibrate_startup_timings.py` when qualifying another
+platform or firmware version. Change the fixed campaign constant only after a
+separate calibration campaign; do not mix delay exploration with the paper's
+scheduling-policy comparison.
 
 For a persistent `Frame didn't arrive within N` state, use
 `--recover-on-failure full-reset`. It first sends the D435 firmware hardware
@@ -259,7 +255,6 @@ measurement remains reproducible if defaults change:
     sudo -v
     .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
       --policies other \
-      --cycle-delays-ms 0 \
       --recover-on-failure full-reset \
       --max-attempts-per-run 3 \
       --recovery-settle-seconds 0 \
@@ -267,7 +262,6 @@ measurement remains reproducible if defaults change:
       --recovery-reset-timeout-ms 5000 \
       --frame-timeout-ms 1500 \
       --join-timeout-ms 10 \
-      --cpu-frequency-mhz 1500 \
       --cycles 1 \
       --frames 60 \
       --nb-runs 20 \
@@ -275,24 +269,13 @@ measurement remains reproducible if defaults change:
       --build-dir build-realsense-thread-trace \
       --results-dir tools/realsense_startup_bench/results/startup_model_other_20runs
 
-For a Raspberry Pi RSUSB run, also select the RSUSB build, identify the camera's
-USB sysfs device, and allow extra wall-clock time for LiME to flush its trace:
-
-    --rsusb-backend \
-    --rsusb-usb-device 3-1 \
-    --rsusb-prepare-timeout-seconds 10 \
-    --rsusb-unbind-settle-seconds 1 \
-    --process-timeout-seconds 90 \
-    --build-dir build-realsense-rsusb
-
-The UVC helper unbinds the selected camera before every measured attempt and
-restores its V4L2 binding when the campaign completes or receives an ordinary
-interrupt. Its unbind retry and settle intervals occur before LiME starts the
-target, so they are not part of the application startup timeline. An
-uncatchable termination such as `SIGKILL` may still require a manual
-`scripts/realsense_rsusb_uvc.sh bind` operation. `--process-timeout-seconds`
-guards the complete tracer process; it does not replace the application's
-`--frame-timeout-ms`.
+RSUSB build, unbind, retry, and restore support remains in the repository for
+separate backend validation. It is not used by the paper campaign:
+`CAMPAIGN_BACKEND = "v4l2"` fixes librealsense to its V4L2 path with the kernel
+`uvcvideo` driver. Changing the backend constants in the runner constitutes a
+different experiment and must use a separate build and results directory. The
+standalone `scripts/realsense_rsusb_uvc.sh` helper remains available for such
+diagnostic work.
 
 Then point the offline model builder at the generated timestamped benchmark
 directory:

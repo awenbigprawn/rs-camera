@@ -416,18 +416,29 @@ keeping frame timing and failure monitoring active throughout.
 
 ### 7.1 CPU busy-loop noise
 
-Define:
+Use the `realsense_cpu_noise` executable with the following controlled design:
 
-- number of workers;
-- scheduling policy and priority;
-- CPU affinity;
-- target utilization;
-- start and stop timestamps.
+```text
+hot working set: one thread-private integer held in registers
+hot-loop operations: dependent integer shift/xor/multiply
+memory activity: no allocation, array scan, memcpy, or shared counter update
+stop polling: one signal-flag load per 4096 operations
+process policy: SCHED_OTHER
+warm-up: 10 s before camera startup
+worker count: fixed once per campaign
+```
 
-The primary condition should use `SCHED_OTHER` workers pinned to the same
-experimental CPUs as the camera threads. A pilot dose-response experiment may
-use one, two, and three workers, after which one fixed saturation level should
-be selected for the main matrix.
+The workload records worker count, effective CPU affinity, ready/end
+`CLOCK_BOOTTIME` timestamps, aggregate process CPU time, CPU equivalents,
+normalized worker utilization, and completed loop iterations. CPU-noise workers
+should be pinned to the same experimental CPUs as the camera threads when
+measuring direct CPU contention.
+
+Run a Raspberry Pi 5 pilot with 1, 2, 3, and 4 workers as separate campaigns.
+Increasing workers occupies more logical CPUs until the affinity mask is
+saturated; additional workers beyond that point increase runnable contention
+but not physical execution throughput. Select one fixed saturation level for
+the main matrix instead of making worker count another Cartesian factor.
 
 ### 7.2 Shi-Tomasi corner-detection noise
 
@@ -717,9 +728,9 @@ cache before every logical repetition by completing `sync` and writing `3` to
 `/proc/sys/vm/drop_caches`. This operation reclaims page cache, dentries, and
 inodes but does not clear anonymous memory or swap. Record its duration and
 before/after `/proc/meminfo` counters with every run. Do not repeat it between
-startup cycles or recovery attempts inside one logical repetition, and label
-any run collected with cache dropping disabled as a separate warm-cache
-condition.
+startup cycles or recovery attempts inside one logical repetition. Cache
+dropping is a fixed platform control and must remain enabled for every paper
+campaign.
 
 ## 12. Staged Experiment Plan
 
@@ -867,6 +878,12 @@ Steady-state campaigns:
 
 ```text
 tools/realsense_steady_bench/run_steady_campaign.py
+```
+
+Register-only CPU noise executable:
+
+```text
+src/realsense_cpu_noise.cpp
 ```
 
 Selected GPU noise executable:

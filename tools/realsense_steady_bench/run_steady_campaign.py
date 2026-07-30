@@ -32,6 +32,22 @@ NCNN_MODEL_PARAM = (
 )
 DEFAULT_BROADCOM_VULKAN_ICD = Path("/usr/share/vulkan/icd.d/broadcom_icd.json")
 
+# Fixed controls for the paper campaign. These are recorded as Benchkit
+# constants and in each run manifest, but are not experimental factors.
+CAMPAIGN_BACKEND = "v4l2"
+CAMPAIGN_USB_KERNEL_DRIVER = "uvcvideo"
+CAMPAIGN_CPU_FREQUENCY_MHZ = 1500
+CAMPAIGN_DROP_CACHES_BEFORE_RUN = True
+CAMPAIGN_RT_PRIORITY = 80
+CAMPAIGN_RSUSB_USB_DEVICES: tuple[str, ...] = ()
+FIXED_CAMPAIGN_CONSTANTS = {
+    "fixed_librealsense_backend": CAMPAIGN_BACKEND,
+    "fixed_usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
+    "fixed_cpu_frequency_mhz": CAMPAIGN_CPU_FREQUENCY_MHZ,
+    "fixed_drop_caches_before_run": CAMPAIGN_DROP_CACHES_BEFORE_RUN,
+    "fixed_rt_priority": CAMPAIGN_RT_PRIORITY,
+}
+
 if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize repository submodules first.")
 sys.path.insert(0, str(BENCHKIT_PATH))
@@ -54,6 +70,7 @@ POLICY_NAMES = {
 }
 GPU_NOISE_MODES = ("none", "mobilenet_v2_vulkan")
 USB_STORAGE_NOISE_MODES = ("none", "sequential_read")
+CPU_NOISE_MODES = ("none", "busy_loop")
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:
@@ -107,13 +124,13 @@ class RealSenseSteadyBench(Benchmark):
         cases: Iterable[Dict[str, Any]],
         build_dir: Path,
         lime: Path,
-        priority: int,
         use_lime: bool,
         use_sudo: bool,
-        drop_caches_before_run: bool,
-        rsusb_backend: bool,
-        rsusb_usb_devices: List[str],
-        cpu_frequency_mhz: int | None,
+        cpu_noise_modes: List[str],
+        cpu_noise_workers: int,
+        cpu_noise_warmup_seconds: float,
+        cpu_noise_ready_timeout_seconds: float,
+        cpu_noise_cpu_affinity: str | None,
         gpu_noise_modes: List[str],
         gpu_noise_device: int,
         gpu_noise_warmup_iterations: int,
@@ -132,20 +149,30 @@ class RealSenseSteadyBench(Benchmark):
             command_wrappers=(),
             command_attachments=(),
             shared_libs=(),
-            pre_run_hooks=(memory_cleanup_hook,) if drop_caches_before_run else (),
+            pre_run_hooks=(
+                (memory_cleanup_hook,)
+                if CAMPAIGN_DROP_CACHES_BEFORE_RUN
+                else ()
+            ),
             post_run_hooks=(),
         )
         self._cases = {case["case_id"]: case for case in cases}
         self._build_dir = build_dir.resolve()
         self._lime = lime.resolve()
-        self._priority = priority
+        self._priority = CAMPAIGN_RT_PRIORITY
         self._use_lime = use_lime
         self._use_sudo = use_sudo
-        self._drop_caches_before_run = drop_caches_before_run
+        self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
-        self._rsusb_backend = rsusb_backend
-        self._rsusb_usb_devices = rsusb_usb_devices
-        self._cpu_frequency_mhz = cpu_frequency_mhz
+        self._rsusb_backend = CAMPAIGN_BACKEND == "rsusb"
+        self._rsusb_usb_devices = list(CAMPAIGN_RSUSB_USB_DEVICES)
+        self._cpu_frequency_mhz = CAMPAIGN_CPU_FREQUENCY_MHZ
+        self._cpu_noise_modes = cpu_noise_modes
+        self._cpu_noise_enabled = any(mode != "none" for mode in cpu_noise_modes)
+        self._cpu_noise_workers = cpu_noise_workers
+        self._cpu_noise_warmup_seconds = cpu_noise_warmup_seconds
+        self._cpu_noise_ready_timeout_seconds = cpu_noise_ready_timeout_seconds
+        self._cpu_noise_cpu_affinity = cpu_noise_cpu_affinity
         self._gpu_noise_modes = gpu_noise_modes
         self._gpu_noise_enabled = any(mode != "none" for mode in gpu_noise_modes)
         self._gpu_noise_device = gpu_noise_device
@@ -165,12 +192,14 @@ class RealSenseSteadyBench(Benchmark):
         self._usb_storage_ready_timeout_seconds = usb_storage_ready_timeout_seconds
         self._usb_storage_identity: Dict[str, Any] = {}
         self._build_jobs = build_jobs
+        self._cpu_noise_process: subprocess.Popen[str] | None = None
         self._gpu_noise_process: subprocess.Popen[str] | None = None
         self._usb_storage_noise_process: subprocess.Popen[str] | None = None
         self._cpu_locked = False
         self._cpu_restore_needed = False
         self._rsusb_unbound = False
         self._probe = self._build_dir / "realsense_steady_probe"
+        self._cpu_noise = self._build_dir / "realsense_cpu_noise"
         self._gpu_noise = self._build_dir / "realsense_gpu_noise"
         self._usb_storage_noise = self._build_dir / "realsense_usb_storage_noise"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
@@ -185,7 +214,7 @@ class RealSenseSteadyBench(Benchmark):
 
     @staticmethod
     def get_run_var_names() -> List[str]:
-        return ["case_id", "policy", "gpu_noise", "usb_storage_noise"]
+        return ["case_id", "policy", "cpu_noise", "gpu_noise", "usb_storage_noise"]
 
     def _privileged(self, command: List[str]) -> List[str]:
         return ["sudo", "--non-interactive", *command] if self._use_sudo else command
@@ -305,6 +334,9 @@ class RealSenseSteadyBench(Benchmark):
             self._memory_cleanup_hook.validate()
         if self._usb_storage_noise_enabled:
             self._usb_storage_identity = self._validate_usb_storage_device()
+        if self._cpu_noise_enabled:
+            if self._cpu_noise_cpu_affinity and shutil.which("taskset") is None:
+                raise RuntimeError("taskset is required for --cpu-noise-cpu-affinity")
         if self._gpu_noise_enabled:
             if not NCNN_MODEL_PARAM.is_file():
                 raise RuntimeError(
@@ -318,7 +350,7 @@ class RealSenseSteadyBench(Benchmark):
                 raise RuntimeError("taskset is required for --gpu-noise-cpu-affinity")
         if self._rsusb_backend and not self._rsusb_usb_devices:
             raise RuntimeError(
-                "--rsusb-backend requires one --rsusb-usb-device per connected camera"
+                "RSUSB campaign constants require one USB device per connected camera"
             )
         helpers = []
         if self._cpu_frequency_mhz is not None:
@@ -342,6 +374,8 @@ class RealSenseSteadyBench(Benchmark):
             ]
         )
         build_targets = ["realsense_steady_probe"]
+        if self._cpu_noise_enabled:
+            build_targets.append("realsense_cpu_noise")
         if self._gpu_noise_enabled:
             build_targets.append("realsense_gpu_noise")
         if self._usb_storage_noise_enabled:
@@ -449,6 +483,120 @@ class RealSenseSteadyBench(Benchmark):
         self._run_rsusb_helper("bind")
         self._rsusb_unbound = False
         print("[RSUSB] kernel UVC interfaces rebound")
+
+    def _cpu_noise_command(
+        self,
+        ready_path: Path,
+        summary_path: Path,
+    ) -> List[str]:
+        command = ["chrt", "--other", "0"]
+        if self._cpu_noise_cpu_affinity:
+            command += ["taskset", "--cpu-list", self._cpu_noise_cpu_affinity]
+        command += [
+            str(self._cpu_noise),
+            "--ready-file",
+            str(ready_path),
+            "--summary-output",
+            str(summary_path),
+            "--workers",
+            str(self._cpu_noise_workers),
+            "--warmup-seconds",
+            str(self._cpu_noise_warmup_seconds),
+        ]
+        return command
+
+    def _start_cpu_noise(self, mode: str, record_dir: Path) -> Dict[str, Any]:
+        if mode == "none":
+            return {"mode": "none", "enabled": False}
+        if mode != "busy_loop":
+            raise ValueError(f"Unsupported CPU-noise mode: {mode}")
+        if self._cpu_noise_process is not None:
+            raise RuntimeError("A CPU-noise process is already running")
+
+        ready_path = record_dir / "cpu_noise_ready.json"
+        summary_path = record_dir / "cpu_noise_summary.json"
+        stdout_path = record_dir / "cpu_noise_stdout.txt"
+        stderr_path = record_dir / "cpu_noise_stderr.txt"
+        process_path = record_dir / "cpu_noise_process.json"
+        command = self._cpu_noise_command(ready_path, summary_path)
+        started = time.monotonic()
+        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_file:
+            self._cpu_noise_process = subprocess.Popen(
+                command,
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+
+        deadline = started + self._cpu_noise_ready_timeout_seconds
+        while time.monotonic() < deadline:
+            returncode = self._cpu_noise_process.poll()
+            if returncode is not None:
+                self._cpu_noise_process = None
+                process_path.write_text(
+                    json.dumps(
+                        {"returncode": returncode, "forced_kill": False},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                detail = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    f"CPU noise exited before ready with code {returncode}: {detail}"
+                )
+            if ready_path.is_file():
+                try:
+                    ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    time.sleep(0.01)
+                    continue
+                if ready.get("ready"):
+                    ready["enabled"] = True
+                    ready["command"] = command
+                    ready["cpu_affinity"] = self._cpu_noise_cpu_affinity or ""
+                    print(
+                        f"[CPU-NOISE] {ready.get('workers', 0)} workers ready at "
+                        f"{ready.get('warmup_cpu_equivalents', 0):.2f} CPU equivalents"
+                    )
+                    return ready
+            time.sleep(0.05)
+
+        self._stop_cpu_noise(record_dir)
+        raise RuntimeError(
+            "CPU noise did not become ready within "
+            f"{self._cpu_noise_ready_timeout_seconds:.1f} seconds"
+        )
+
+    def _stop_cpu_noise(self, record_dir: Path | None = None) -> None:
+        process = self._cpu_noise_process
+        if process is None:
+            return
+        self._cpu_noise_process = None
+        forced = False
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                forced = True
+                process.kill()
+                process.wait(timeout=5)
+        if record_dir is not None:
+            (record_dir / "cpu_noise_process.json").write_text(
+                json.dumps(
+                    {"returncode": process.returncode, "forced_kill": forced},
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        print(f"[CPU-NOISE] stopped with code {process.returncode}")
 
     def _usb_storage_noise_command(
         self,
@@ -791,6 +939,7 @@ class RealSenseSteadyBench(Benchmark):
         self,
         case_id: str,
         policy: str,
+        cpu_noise: str,
         gpu_noise: str,
         usb_storage_noise: str,
         record_data_dir: Path,
@@ -807,6 +956,7 @@ class RealSenseSteadyBench(Benchmark):
         lifecycle_path = record_dir / "thread_lifecycle.jsonl"
         lime_dir = record_dir / "lime_trace"
         stdout_path = record_dir / "probe_stdout.txt"
+        cpu_noise_ready: Dict[str, Any] = {"mode": cpu_noise, "enabled": False}
         gpu_noise_ready: Dict[str, Any] = {"mode": gpu_noise, "enabled": False}
         before = record_dir / "topology_before.json"
         after = record_dir / "topology_after.json"
@@ -842,11 +992,20 @@ class RealSenseSteadyBench(Benchmark):
             "policy_requested": POLICY_NAMES[policy],
             "priority_requested": 0 if policy == "other" else self._priority,
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
+            "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
             "lime_enabled": self._use_lime,
             "cpu_frequency_mhz": self._cpu_frequency_mhz,
             "drop_caches_before_run": getattr(
                 self, "_drop_caches_before_run", False
             ),
+            "cpu_noise": {
+                "mode": cpu_noise,
+                "workers": self._cpu_noise_workers,
+                "warmup_seconds": self._cpu_noise_warmup_seconds,
+                "cpu_affinity": self._cpu_noise_cpu_affinity,
+                "working_set": "register_only",
+                "process_policy": "SCHED_OTHER",
+            },
             "usb_storage_noise": {
                 "mode": usb_storage_noise,
                 "device": (
@@ -895,6 +1054,11 @@ class RealSenseSteadyBench(Benchmark):
         timeout = max(int(automatic_seconds), int(measurement_timeout + 60))
         kernel_before, kernel_error = self._kernel_log()
         try:
+            cpu_noise_ready = self._start_cpu_noise(cpu_noise, record_dir)
+            (record_dir / "cpu_noise_configuration.json").write_text(
+                json.dumps(cpu_noise_ready, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             usb_storage_ready = self._start_usb_storage_noise(
                 usb_storage_noise, record_dir
             )
@@ -921,6 +1085,7 @@ class RealSenseSteadyBench(Benchmark):
         finally:
             self._stop_gpu_noise(record_dir)
             self._stop_usb_storage_noise(record_dir)
+            self._stop_cpu_noise(record_dir)
             kernel_after, after_error = self._kernel_log()
             kernel_error = kernel_error or after_error
             if kernel_before is not None and kernel_after is not None:
@@ -973,6 +1138,8 @@ class RealSenseSteadyBench(Benchmark):
             "error": data.get("error", "summary file missing"),
             "backend": "RSUSB" if self._rsusb_backend else "V4L2",
             "policy_requested": POLICY_NAMES[run_variables["policy"]],
+            "cpu_noise_mode": run_variables["cpu_noise"],
+            "cpu_noise_enabled": run_variables["cpu_noise"] != "none",
             "gpu_noise_mode": run_variables["gpu_noise"],
             "gpu_noise_enabled": run_variables["gpu_noise"] != "none",
             "usb_storage_noise_mode": run_variables["usb_storage_noise"],
@@ -985,6 +1152,48 @@ class RealSenseSteadyBench(Benchmark):
             "measurement_duration_ms": data.get("measurement", {}).get("duration_ms", 0),
             "record_data_dir": str(record_dir),
         }
+        cpu_summary_path = record_dir / "cpu_noise_summary.json"
+        cpu_ready_path = record_dir / "cpu_noise_ready.json"
+        cpu_process_path = record_dir / "cpu_noise_process.json"
+        cpu_summary = (
+            json.loads(cpu_summary_path.read_text(encoding="utf-8"))
+            if cpu_summary_path.is_file()
+            else {}
+        )
+        cpu_ready = (
+            json.loads(cpu_ready_path.read_text(encoding="utf-8"))
+            if cpu_ready_path.is_file()
+            else {}
+        )
+        cpu_process = (
+            json.loads(cpu_process_path.read_text(encoding="utf-8"))
+            if cpu_process_path.is_file()
+            else {}
+        )
+        result["cpu_noise_ready"] = bool(cpu_ready.get("ready", False))
+        result["cpu_noise_process_returncode"] = cpu_process.get("returncode", "")
+        result["cpu_noise_forced_kill"] = cpu_process.get("forced_kill", False)
+        if cpu_summary:
+            flatten("cpu_noise", cpu_summary, result)
+        if run_variables["cpu_noise"] != "none":
+            cpu_valid = (
+                bool(cpu_ready.get("ready"))
+                and bool(cpu_summary.get("success"))
+                and cpu_summary.get("working_set") == "register_only"
+                and cpu_summary.get("workers") == self._cpu_noise_workers
+                and float(cpu_summary.get("measurement_cpu_equivalents", 0)) > 0.0
+                and cpu_process.get("returncode") == 0
+                and not cpu_process.get("forced_kill", False)
+            )
+            result["cpu_noise_valid"] = cpu_valid
+            if not cpu_valid:
+                result["success"] = False
+                result["error"] = (
+                    str(result.get("error", "")) + " | invalid CPU-noise process"
+                ).strip(" |")
+        else:
+            result["cpu_noise_valid"] = True
+
         usb_summary_path = record_dir / "usb_storage_noise_summary.json"
         usb_ready_path = record_dir / "usb_storage_noise_ready.json"
         usb_process_path = record_dir / "usb_storage_noise_process.json"
@@ -1146,6 +1355,7 @@ def run_with_cleanup(
         for description, cleanup in (
             ("stop GPU noise", benchmark._stop_gpu_noise),
             ("stop USB storage noise", benchmark._stop_usb_storage_noise),
+            ("stop CPU noise", benchmark._stop_cpu_noise),
             ("restore V4L2 binding", benchmark.restore_v4l2_binding),
             ("restore CPU frequency", benchmark.restore_cpu_frequency),
         ):
@@ -1168,7 +1378,6 @@ def main() -> None:
     )
     parser.add_argument("--case", dest="case_ids", action="append")
     parser.add_argument("--policies", nargs="+", choices=POLICY_NAMES, default=["other"])
-    parser.add_argument("--priority", type=int, default=80)
     parser.add_argument("--nb-runs", type=int, default=1)
     parser.add_argument("--frames", type=int, help="Override measured frames for every case")
     parser.add_argument("--serial", dest="serials", action="append")
@@ -1178,12 +1387,23 @@ def main() -> None:
     parser.add_argument("--no-lime", action="store_true")
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
-        "--no-drop-caches",
-        action="store_true",
-        help=(
-            "Do not sync and drop Linux page cache, dentries, and inodes before "
-            "each logical Benchkit run."
-        ),
+        "--cpu-noise-modes",
+        nargs="+",
+        choices=CPU_NOISE_MODES,
+        default=["none"],
+        help="Cartesian CPU-noise variable; busy_loop uses register-only arithmetic",
+    )
+    parser.add_argument(
+        "--cpu-noise-workers",
+        type=int,
+        default=max(1, os.cpu_count() or 1),
+        help="busy-loop worker count; defaults to the number of logical CPUs",
+    )
+    parser.add_argument("--cpu-noise-warmup-seconds", type=float, default=10.0)
+    parser.add_argument("--cpu-noise-ready-timeout-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--cpu-noise-cpu-affinity",
+        help="optional taskset CPU list inherited by every busy-loop worker",
     )
     parser.add_argument(
         "--gpu-noise-modes",
@@ -1224,17 +1444,17 @@ def main() -> None:
         default=max(1, (os.cpu_count() or 2) - 1),
         help="Parallel build jobs; defaults to leaving one CPU free",
     )
-    parser.add_argument("--rsusb-backend", action="store_true")
-    parser.add_argument("--rsusb-usb-device", action="append", default=[])
-    parser.add_argument(
-        "--cpu-frequency-mhz",
-        type=int,
-        default=1500,
-        help="Lock once before the first run; use 0 to disable",
-    )
     args = parser.parse_args()
     if args.build_jobs < 1:
         raise SystemExit("--build-jobs must be positive")
+    if args.cpu_noise_workers < 1:
+        raise SystemExit("--cpu-noise-workers must be positive")
+    if args.cpu_noise_warmup_seconds <= 0:
+        raise SystemExit("--cpu-noise-warmup-seconds must be positive")
+    if args.cpu_noise_ready_timeout_seconds <= args.cpu_noise_warmup_seconds:
+        raise SystemExit(
+            "--cpu-noise-ready-timeout-seconds must exceed the warm-up duration"
+        )
     if args.gpu_noise_warmup_iterations < 1:
         raise SystemExit("--gpu-noise-warmup-iterations must be positive")
     if args.gpu_noise_ready_timeout_seconds <= 0:
@@ -1284,13 +1504,13 @@ def main() -> None:
         cases=cases,
         build_dir=args.build_dir,
         lime=args.lime,
-        priority=args.priority,
         use_lime=not args.no_lime,
         use_sudo=not args.no_sudo,
-        drop_caches_before_run=not args.no_drop_caches,
-        rsusb_backend=args.rsusb_backend,
-        rsusb_usb_devices=args.rsusb_usb_device,
-        cpu_frequency_mhz=args.cpu_frequency_mhz or None,
+        cpu_noise_modes=args.cpu_noise_modes,
+        cpu_noise_workers=args.cpu_noise_workers,
+        cpu_noise_warmup_seconds=args.cpu_noise_warmup_seconds,
+        cpu_noise_ready_timeout_seconds=args.cpu_noise_ready_timeout_seconds,
+        cpu_noise_cpu_affinity=args.cpu_noise_cpu_affinity,
         gpu_noise_modes=args.gpu_noise_modes,
         gpu_noise_device=args.gpu_noise_device,
         gpu_noise_warmup_iterations=args.gpu_noise_warmup_iterations,
@@ -1311,10 +1531,11 @@ def main() -> None:
         variables={
             "case_id": [case["case_id"] for case in cases],
             "policy": args.policies,
+            "cpu_noise": args.cpu_noise_modes,
             "gpu_noise": args.gpu_noise_modes,
             "usb_storage_noise": args.usb_storage_noise_modes,
         },
-        constants=None,
+        constants=FIXED_CAMPAIGN_CONSTANTS,
         debug=False,
         gdb=False,
         enable_data_dir=True,

@@ -58,8 +58,7 @@ class DropCachesBeforeRun:
                 raise RuntimeError("sudo is required for per-run cache dropping")
         elif os.geteuid() != 0 and not os.access(DROP_CACHES_PATH, os.W_OK):
             raise RuntimeError(
-                "dropping caches requires root; run with sudo enabled or pass "
-                "--no-drop-caches"
+                "dropping caches requires root; run the campaign with sudo enabled"
             )
 
     def _drop_command(self) -> list[str]:
