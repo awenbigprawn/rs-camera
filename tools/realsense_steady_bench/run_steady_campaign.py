@@ -71,6 +71,7 @@ POLICY_NAMES = {
 GPU_NOISE_MODES = ("none", "mobilenet_v2_vulkan")
 USB_STORAGE_NOISE_MODES = ("none", "sequential_read")
 CPU_NOISE_MODES = ("none", "busy_loop")
+MEMORY_NOISE_MODES = ("none", "fixed_copy")
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:
@@ -131,6 +132,12 @@ class RealSenseSteadyBench(Benchmark):
         cpu_noise_warmup_seconds: float,
         cpu_noise_ready_timeout_seconds: float,
         cpu_noise_cpu_affinity: str | None,
+        memory_noise_modes: List[str],
+        memory_noise_workers: int,
+        memory_noise_buffer_size_mib: int,
+        memory_noise_warmup_seconds: float,
+        memory_noise_ready_timeout_seconds: float,
+        memory_noise_cpu_affinity: str | None,
         gpu_noise_modes: List[str],
         gpu_noise_device: int,
         gpu_noise_warmup_iterations: int,
@@ -173,6 +180,15 @@ class RealSenseSteadyBench(Benchmark):
         self._cpu_noise_warmup_seconds = cpu_noise_warmup_seconds
         self._cpu_noise_ready_timeout_seconds = cpu_noise_ready_timeout_seconds
         self._cpu_noise_cpu_affinity = cpu_noise_cpu_affinity
+        self._memory_noise_modes = memory_noise_modes
+        self._memory_noise_enabled = any(
+            mode != "none" for mode in memory_noise_modes
+        )
+        self._memory_noise_workers = memory_noise_workers
+        self._memory_noise_buffer_size_mib = memory_noise_buffer_size_mib
+        self._memory_noise_warmup_seconds = memory_noise_warmup_seconds
+        self._memory_noise_ready_timeout_seconds = memory_noise_ready_timeout_seconds
+        self._memory_noise_cpu_affinity = memory_noise_cpu_affinity
         self._gpu_noise_modes = gpu_noise_modes
         self._gpu_noise_enabled = any(mode != "none" for mode in gpu_noise_modes)
         self._gpu_noise_device = gpu_noise_device
@@ -193,6 +209,7 @@ class RealSenseSteadyBench(Benchmark):
         self._usb_storage_identity: Dict[str, Any] = {}
         self._build_jobs = build_jobs
         self._cpu_noise_process: subprocess.Popen[str] | None = None
+        self._memory_noise_process: subprocess.Popen[str] | None = None
         self._gpu_noise_process: subprocess.Popen[str] | None = None
         self._usb_storage_noise_process: subprocess.Popen[str] | None = None
         self._cpu_locked = False
@@ -200,6 +217,7 @@ class RealSenseSteadyBench(Benchmark):
         self._rsusb_unbound = False
         self._probe = self._build_dir / "realsense_steady_probe"
         self._cpu_noise = self._build_dir / "realsense_cpu_noise"
+        self._memory_noise = self._build_dir / "realsense_memory_noise"
         self._gpu_noise = self._build_dir / "realsense_gpu_noise"
         self._usb_storage_noise = self._build_dir / "realsense_usb_storage_noise"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
@@ -214,7 +232,14 @@ class RealSenseSteadyBench(Benchmark):
 
     @staticmethod
     def get_run_var_names() -> List[str]:
-        return ["case_id", "policy", "cpu_noise", "gpu_noise", "usb_storage_noise"]
+        return [
+            "case_id",
+            "policy",
+            "cpu_noise",
+            "memory_noise",
+            "gpu_noise",
+            "usb_storage_noise",
+        ]
 
     def _privileged(self, command: List[str]) -> List[str]:
         return ["sudo", "--non-interactive", *command] if self._use_sudo else command
@@ -337,6 +362,9 @@ class RealSenseSteadyBench(Benchmark):
         if self._cpu_noise_enabled:
             if self._cpu_noise_cpu_affinity and shutil.which("taskset") is None:
                 raise RuntimeError("taskset is required for --cpu-noise-cpu-affinity")
+        if self._memory_noise_enabled:
+            if self._memory_noise_cpu_affinity and shutil.which("taskset") is None:
+                raise RuntimeError("taskset is required for --memory-noise-cpu-affinity")
         if self._gpu_noise_enabled:
             if not NCNN_MODEL_PARAM.is_file():
                 raise RuntimeError(
@@ -376,6 +404,8 @@ class RealSenseSteadyBench(Benchmark):
         build_targets = ["realsense_steady_probe"]
         if self._cpu_noise_enabled:
             build_targets.append("realsense_cpu_noise")
+        if self._memory_noise_enabled:
+            build_targets.append("realsense_memory_noise")
         if self._gpu_noise_enabled:
             build_targets.append("realsense_gpu_noise")
         if self._usb_storage_noise_enabled:
@@ -597,6 +627,125 @@ class RealSenseSteadyBench(Benchmark):
                 encoding="utf-8",
             )
         print(f"[CPU-NOISE] stopped with code {process.returncode}")
+
+    def _memory_noise_command(
+        self,
+        ready_path: Path,
+        summary_path: Path,
+    ) -> List[str]:
+        command = ["chrt", "--other", "0"]
+        if self._memory_noise_cpu_affinity:
+            command += ["taskset", "--cpu-list", self._memory_noise_cpu_affinity]
+        command += [
+            str(self._memory_noise),
+            "--ready-file",
+            str(ready_path),
+            "--summary-output",
+            str(summary_path),
+            "--workers",
+            str(self._memory_noise_workers),
+            "--buffer-size-mib",
+            str(self._memory_noise_buffer_size_mib),
+            "--warmup-seconds",
+            str(self._memory_noise_warmup_seconds),
+        ]
+        return command
+
+    def _start_memory_noise(self, mode: str, record_dir: Path) -> Dict[str, Any]:
+        if mode == "none":
+            return {"mode": "none", "enabled": False}
+        if mode != "fixed_copy":
+            raise ValueError(f"Unsupported memory-noise mode: {mode}")
+        if self._memory_noise_process is not None:
+            raise RuntimeError("A memory-noise process is already running")
+
+        ready_path = record_dir / "memory_noise_ready.json"
+        summary_path = record_dir / "memory_noise_summary.json"
+        stdout_path = record_dir / "memory_noise_stdout.txt"
+        stderr_path = record_dir / "memory_noise_stderr.txt"
+        process_path = record_dir / "memory_noise_process.json"
+        command = self._memory_noise_command(ready_path, summary_path)
+        started = time.monotonic()
+        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_file:
+            self._memory_noise_process = subprocess.Popen(
+                command,
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+
+        deadline = started + self._memory_noise_ready_timeout_seconds
+        while time.monotonic() < deadline:
+            returncode = self._memory_noise_process.poll()
+            if returncode is not None:
+                self._memory_noise_process = None
+                process_path.write_text(
+                    json.dumps(
+                        {"returncode": returncode, "forced_kill": False},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                detail = stderr_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).strip()
+                raise RuntimeError(
+                    f"Memory noise exited before ready with code {returncode}: {detail}"
+                )
+            if ready_path.is_file():
+                try:
+                    ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    time.sleep(0.01)
+                    continue
+                if ready.get("ready"):
+                    ready["enabled"] = True
+                    ready["command"] = command
+                    ready["cpu_affinity"] = self._memory_noise_cpu_affinity or ""
+                    print(
+                        f"[MEMORY-NOISE] {ready.get('workers', 0)} workers ready at "
+                        f"{ready.get('warmup_estimated_memory_mib_per_second', 0):.1f} "
+                        "MiB/s estimated read+write traffic"
+                    )
+                    return ready
+            time.sleep(0.05)
+
+        self._stop_memory_noise(record_dir)
+        raise RuntimeError(
+            "Memory noise did not become ready within "
+            f"{self._memory_noise_ready_timeout_seconds:.1f} seconds"
+        )
+
+    def _stop_memory_noise(self, record_dir: Path | None = None) -> None:
+        process = self._memory_noise_process
+        if process is None:
+            return
+        self._memory_noise_process = None
+        forced = False
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                forced = True
+                process.kill()
+                process.wait(timeout=5)
+        if record_dir is not None:
+            (record_dir / "memory_noise_process.json").write_text(
+                json.dumps(
+                    {"returncode": process.returncode, "forced_kill": forced},
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        print(f"[MEMORY-NOISE] stopped with code {process.returncode}")
 
     def _usb_storage_noise_command(
         self,
@@ -940,6 +1089,7 @@ class RealSenseSteadyBench(Benchmark):
         case_id: str,
         policy: str,
         cpu_noise: str,
+        memory_noise: str,
         gpu_noise: str,
         usb_storage_noise: str,
         record_data_dir: Path,
@@ -957,6 +1107,10 @@ class RealSenseSteadyBench(Benchmark):
         lime_dir = record_dir / "lime_trace"
         stdout_path = record_dir / "probe_stdout.txt"
         cpu_noise_ready: Dict[str, Any] = {"mode": cpu_noise, "enabled": False}
+        memory_noise_ready: Dict[str, Any] = {
+            "mode": memory_noise,
+            "enabled": False,
+        }
         gpu_noise_ready: Dict[str, Any] = {"mode": gpu_noise, "enabled": False}
         before = record_dir / "topology_before.json"
         after = record_dir / "topology_after.json"
@@ -1004,6 +1158,16 @@ class RealSenseSteadyBench(Benchmark):
                 "warmup_seconds": self._cpu_noise_warmup_seconds,
                 "cpu_affinity": self._cpu_noise_cpu_affinity,
                 "working_set": "register_only",
+                "process_policy": "SCHED_OTHER",
+            },
+            "memory_noise": {
+                "mode": memory_noise,
+                "workers": self._memory_noise_workers,
+                "buffer_size_mib": self._memory_noise_buffer_size_mib,
+                "buffers_per_worker": 2,
+                "warmup_seconds": self._memory_noise_warmup_seconds,
+                "cpu_affinity": self._memory_noise_cpu_affinity,
+                "memory_access": "thread_private_memcpy_read_write",
                 "process_policy": "SCHED_OTHER",
             },
             "usb_storage_noise": {
@@ -1059,6 +1223,11 @@ class RealSenseSteadyBench(Benchmark):
                 json.dumps(cpu_noise_ready, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            memory_noise_ready = self._start_memory_noise(memory_noise, record_dir)
+            (record_dir / "memory_noise_configuration.json").write_text(
+                json.dumps(memory_noise_ready, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             usb_storage_ready = self._start_usb_storage_noise(
                 usb_storage_noise, record_dir
             )
@@ -1085,6 +1254,7 @@ class RealSenseSteadyBench(Benchmark):
         finally:
             self._stop_gpu_noise(record_dir)
             self._stop_usb_storage_noise(record_dir)
+            self._stop_memory_noise(record_dir)
             self._stop_cpu_noise(record_dir)
             kernel_after, after_error = self._kernel_log()
             kernel_error = kernel_error or after_error
@@ -1140,6 +1310,8 @@ class RealSenseSteadyBench(Benchmark):
             "policy_requested": POLICY_NAMES[run_variables["policy"]],
             "cpu_noise_mode": run_variables["cpu_noise"],
             "cpu_noise_enabled": run_variables["cpu_noise"] != "none",
+            "memory_noise_mode": run_variables["memory_noise"],
+            "memory_noise_enabled": run_variables["memory_noise"] != "none",
             "gpu_noise_mode": run_variables["gpu_noise"],
             "gpu_noise_enabled": run_variables["gpu_noise"] != "none",
             "usb_storage_noise_mode": run_variables["usb_storage_noise"],
@@ -1193,6 +1365,57 @@ class RealSenseSteadyBench(Benchmark):
                 ).strip(" |")
         else:
             result["cpu_noise_valid"] = True
+
+        memory_summary_path = record_dir / "memory_noise_summary.json"
+        memory_ready_path = record_dir / "memory_noise_ready.json"
+        memory_process_path = record_dir / "memory_noise_process.json"
+        memory_summary = (
+            json.loads(memory_summary_path.read_text(encoding="utf-8"))
+            if memory_summary_path.is_file()
+            else {}
+        )
+        memory_ready = (
+            json.loads(memory_ready_path.read_text(encoding="utf-8"))
+            if memory_ready_path.is_file()
+            else {}
+        )
+        memory_process = (
+            json.loads(memory_process_path.read_text(encoding="utf-8"))
+            if memory_process_path.is_file()
+            else {}
+        )
+        result["memory_noise_ready"] = bool(memory_ready.get("ready", False))
+        result["memory_noise_process_returncode"] = memory_process.get(
+            "returncode", ""
+        )
+        result["memory_noise_forced_kill"] = memory_process.get(
+            "forced_kill", False
+        )
+        if memory_summary:
+            flatten("memory_noise", memory_summary, result)
+        if run_variables["memory_noise"] != "none":
+            memory_valid = (
+                bool(memory_ready.get("ready"))
+                and bool(memory_summary.get("success"))
+                and memory_summary.get("memory_access")
+                == "thread_private_memcpy_read_write"
+                and memory_summary.get("workers") == self._memory_noise_workers
+                and memory_summary.get("buffer_size_mib")
+                == self._memory_noise_buffer_size_mib
+                and int(memory_summary.get("payload_bytes_copied", 0)) > 0
+                and float(memory_summary.get("estimated_memory_mib_per_second", 0))
+                > 0.0
+                and memory_process.get("returncode") == 0
+                and not memory_process.get("forced_kill", False)
+            )
+            result["memory_noise_valid"] = memory_valid
+            if not memory_valid:
+                result["success"] = False
+                result["error"] = (
+                    str(result.get("error", "")) + " | invalid memory-noise process"
+                ).strip(" |")
+        else:
+            result["memory_noise_valid"] = True
 
         usb_summary_path = record_dir / "usb_storage_noise_summary.json"
         usb_ready_path = record_dir / "usb_storage_noise_ready.json"
@@ -1355,6 +1578,7 @@ def run_with_cleanup(
         for description, cleanup in (
             ("stop GPU noise", benchmark._stop_gpu_noise),
             ("stop USB storage noise", benchmark._stop_usb_storage_noise),
+            ("stop memory noise", benchmark._stop_memory_noise),
             ("stop CPU noise", benchmark._stop_cpu_noise),
             ("restore V4L2 binding", benchmark.restore_v4l2_binding),
             ("restore CPU frequency", benchmark.restore_cpu_frequency),
@@ -1406,6 +1630,33 @@ def main() -> None:
         help="optional taskset CPU list inherited by every busy-loop worker",
     )
     parser.add_argument(
+        "--memory-noise-modes",
+        nargs="+",
+        choices=MEMORY_NOISE_MODES,
+        default=["none"],
+        help="Cartesian memory-noise variable; fixed_copy streams between private buffers",
+    )
+    parser.add_argument(
+        "--memory-noise-workers",
+        type=int,
+        default=max(1, os.cpu_count() or 1),
+        help="fixed-copy worker count; defaults to the number of logical CPUs",
+    )
+    parser.add_argument(
+        "--memory-noise-buffer-size-mib",
+        type=int,
+        default=64,
+        help="size of each source and destination buffer per worker (default: 64 MiB)",
+    )
+    parser.add_argument("--memory-noise-warmup-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--memory-noise-ready-timeout-seconds", type=float, default=30.0
+    )
+    parser.add_argument(
+        "--memory-noise-cpu-affinity",
+        help="optional taskset CPU list inherited by every fixed-copy worker",
+    )
+    parser.add_argument(
         "--gpu-noise-modes",
         nargs="+",
         choices=GPU_NOISE_MODES,
@@ -1454,6 +1705,16 @@ def main() -> None:
     if args.cpu_noise_ready_timeout_seconds <= args.cpu_noise_warmup_seconds:
         raise SystemExit(
             "--cpu-noise-ready-timeout-seconds must exceed the warm-up duration"
+        )
+    if args.memory_noise_workers < 1:
+        raise SystemExit("--memory-noise-workers must be positive")
+    if args.memory_noise_buffer_size_mib < 1:
+        raise SystemExit("--memory-noise-buffer-size-mib must be positive")
+    if args.memory_noise_warmup_seconds <= 0:
+        raise SystemExit("--memory-noise-warmup-seconds must be positive")
+    if args.memory_noise_ready_timeout_seconds <= args.memory_noise_warmup_seconds:
+        raise SystemExit(
+            "--memory-noise-ready-timeout-seconds must exceed the warm-up duration"
         )
     if args.gpu_noise_warmup_iterations < 1:
         raise SystemExit("--gpu-noise-warmup-iterations must be positive")
@@ -1511,6 +1772,12 @@ def main() -> None:
         cpu_noise_warmup_seconds=args.cpu_noise_warmup_seconds,
         cpu_noise_ready_timeout_seconds=args.cpu_noise_ready_timeout_seconds,
         cpu_noise_cpu_affinity=args.cpu_noise_cpu_affinity,
+        memory_noise_modes=args.memory_noise_modes,
+        memory_noise_workers=args.memory_noise_workers,
+        memory_noise_buffer_size_mib=args.memory_noise_buffer_size_mib,
+        memory_noise_warmup_seconds=args.memory_noise_warmup_seconds,
+        memory_noise_ready_timeout_seconds=args.memory_noise_ready_timeout_seconds,
+        memory_noise_cpu_affinity=args.memory_noise_cpu_affinity,
         gpu_noise_modes=args.gpu_noise_modes,
         gpu_noise_device=args.gpu_noise_device,
         gpu_noise_warmup_iterations=args.gpu_noise_warmup_iterations,
@@ -1532,6 +1799,7 @@ def main() -> None:
             "case_id": [case["case_id"] for case in cases],
             "policy": args.policies,
             "cpu_noise": args.cpu_noise_modes,
+            "memory_noise": args.memory_noise_modes,
             "gpu_noise": args.gpu_noise_modes,
             "usb_storage_noise": args.usb_storage_noise_modes,
         },

@@ -12,7 +12,7 @@ Raspberry Pi 5. The study targets:
 - frame jitter, deadline misses, timeouts, and frame loss;
 - the effects of Linux scheduling policies and `PREEMPT_RT`;
 - scalability from one to four cameras;
-- sensitivity to CPU and USB I/O interference;
+- sensitivity to CPU, memory, USB I/O, and GPU interference;
 - calibration and evaluation of per-thread `SCHED_DEADLINE` reservations.
 
 The main research questions are:
@@ -156,13 +156,14 @@ to pipeline indices must be recorded.
 noise:
   none
   cpu_busy
+  memory_fixed_copy
   shi_tomasi
   usb_storage_sequential_read
   gpu_mobilenet_v2_vulkan
 ```
 
-An optional memory-bandwidth workload may be added after the primary matrix if
-CPU scheduling contention needs to be separated from memory contention.
+The register-only busy loop and fixed-copy workload separate CPU scheduling
+contention from sustained host-memory traffic.
 
 ## 4. USB Topology and Camera Placement
 
@@ -405,7 +406,7 @@ Do not apply the one-hour phase to the complete Cartesian product. Select:
 - the best-performing real-time policy;
 - representative and stress workloads;
 - the maximum feasible camera count;
-- the most important CPU-noise and USB-noise conditions;
+- the most important CPU-, memory-, and USB-noise conditions;
 - selected best-case and worst-case configurations.
 
 Continuous frame metrics are required for the full hour. If a full LiME trace
@@ -440,7 +441,34 @@ saturated; additional workers beyond that point increase runnable contention
 but not physical execution throughput. Select one fixed saturation level for
 the main matrix instead of making worker count another Cartesian factor.
 
-### 7.2 Shi-Tomasi corner-detection noise
+### 7.2 Fixed-size memory-copy noise
+
+Use `realsense_memory_noise` to alternate fixed-size copies between two
+aligned, pre-touched, thread-private buffers per worker:
+
+```text
+access: memcpy read plus write
+buffer size: 64 MiB per source or destination buffer
+allocation: 2 x 64 MiB per worker
+process policy: SCHED_OTHER
+warm-up: 10 s before camera startup
+worker count: fixed once per campaign
+```
+
+The buffer size exceeds ordinary CPU cache capacity so repeated copies target
+the memory hierarchy rather than a small cache-resident working set. Record
+payload-copy MiB/s, estimated read-plus-write MiB/s, process CPU equivalents,
+worker count, buffer size, total allocation, affinity, and timing boundaries.
+The read-plus-write rate is an algorithmic estimate; hardware memory-controller
+counters should be reported separately when available.
+
+Run a Raspberry Pi 5 pilot with 1, 2, 3, and 4 workers. Select the smallest
+worker count that reaches stable near-maximum bandwidth, since additional
+workers add scheduler contention without necessarily increasing memory load.
+Do not interpret this workload as pure memory contention: `memcpy` necessarily
+uses CPU execution time, which is why the CPU-equivalent metric is required.
+
+### 7.3 Shi-Tomasi corner-detection noise
 
 Use a fixed prerecorded image sequence rather than frames from the camera
 under test. Fix:
@@ -456,7 +484,7 @@ under test. Fix:
 This represents realistic computer-vision interference, while the busy loop
 provides a simpler scheduler-contention upper bound.
 
-### 7.3 USB storage noise
+### 7.4 USB storage noise
 
 Use the read-only `realsense_usb_storage_noise` workload on a dedicated,
 unmounted USB whole-disk device:
@@ -492,7 +520,7 @@ Prefer a USB 3 storage device connected to the same powered USB 3 hub as the
 camera. Confirm placement from `lsusb -t` and sysfs rather than physical port
 labels alone.
 
-### 7.4 MobileNetV2 Vulkan GPU noise
+### 7.5 MobileNetV2 Vulkan GPU noise
 
 Use the single selected GPU workload implemented by `realsense_gpu_noise`:
 
@@ -519,12 +547,12 @@ camera run.
 This is the only GPU-noise treatment in the formal experiment. Synthetic
 compute/copy loops, ResNet18, and YOLO are excluded after candidate selection.
 
-### 7.5 Noise timing
+### 7.6 Noise timing
 
 For steady-state experiments:
 
 ```text
-CPU and USB noise start: at least 10 s before camera warm-up
+CPU, memory, and USB noise start: at least 10 s before camera warm-up
 GPU noise start: before camera startup; wait for 10 complete warm-up inferences and ready signal
 noise stop: after camera measurement and pipeline stop
 ```
@@ -741,8 +769,8 @@ A complete Cartesian product would be too large:
 x 4 policies
 x 2 workloads
 x 4 camera counts
-x 5 noise conditions
-= 320 steady-state configurations
+x 6 noise conditions
+= 384 steady-state configurations
 ```
 
 At five repetitions and ten minutes per repetition, this would require more
@@ -804,7 +832,7 @@ kernel: default, PREEMPT_RT
 camera_count: 1 and maximum feasible count
 policy: OTHER and the best real-time policy
 workload: representative, stress
-noise: none, cpu_busy, shi_tomasi, usb_storage_sequential_read, gpu_mobilenet_v2_vulkan
+noise: none, cpu_busy, memory_fixed_copy, shi_tomasi, usb_storage_sequential_read, gpu_mobilenet_v2_vulkan
 ```
 
 ### Stage F: long-run validation
@@ -884,6 +912,12 @@ Register-only CPU noise executable:
 
 ```text
 src/realsense_cpu_noise.cpp
+```
+
+Fixed-size memory-copy noise executable:
+
+```text
+src/realsense_memory_noise.cpp
 ```
 
 Selected GPU noise executable:

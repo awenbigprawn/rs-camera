@@ -133,6 +133,11 @@ The steady campaign also provides a register-only CPU busy-loop condition.
 Select it with `--cpu-noise-modes none busy_loop` and set its fixed per-campaign
 intensity with `--cpu-noise-workers N`.
 
+Memory-bandwidth contention is available separately as fixed-size copies
+between thread-private buffers. Select it with
+`--memory-noise-modes none fixed_copy`, then fix the worker count and per-buffer
+size with `--memory-noise-workers N` and `--memory-noise-buffer-size-mib M`.
+
 ## Startup timing campaign
 
 See tools/realsense_startup_bench/README.md. The standard paper-oriented run is:

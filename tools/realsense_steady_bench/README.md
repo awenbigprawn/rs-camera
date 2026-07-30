@@ -12,8 +12,8 @@ and then records the same number of frame deliveries from every camera.
 
 | Role | Setting |
 | --- | --- |
-| Cartesian factors | workload case, scheduling policy, CPU-noise mode, GPU-noise mode, and USB-storage-noise mode |
-| Operational inputs | camera serials, CPU-noise worker count/affinity, frame override, repetitions, build jobs, and output path |
+| Cartesian factors | workload case, scheduling policy, CPU-noise mode, memory-noise mode, GPU-noise mode, and USB-storage-noise mode |
+| Operational inputs | camera serials, CPU/memory-noise worker counts and affinity, memory buffer size, frame override, repetitions, build jobs, and output path |
 | Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, and RT priority 80 |
 
 Fixed controls are declared near the top of `run_steady_campaign.py` and are
@@ -206,6 +206,51 @@ normalized worker utilization, completed register-loop iterations, start/stop
 timestamps, worker count, and affinity. Optional timing controls are
 `--cpu-noise-warmup-seconds` and `--cpu-noise-ready-timeout-seconds`.
 
+## Fixed-Size Memory-Copy Noise
+
+The `fixed_copy` condition isolates sustained host-memory contention from the
+register-only CPU condition. Every `SCHED_OTHER` worker owns two aligned,
+pre-touched buffers and alternates their roles as source and destination for
+each `memcpy`. The default 64 MiB buffer is deliberately larger than ordinary
+CPU caches. With `N` workers, the process allocates `2 x N x 64 MiB` by default.
+
+Set a fixed dose per campaign with `--memory-noise-workers N` and
+`--memory-noise-buffer-size-mib M`. More workers can increase memory-controller
+pressure until bandwidth saturates, but they also consume CPU execution time;
+the reported process CPU equivalents quantify that unavoidable component. Use
+`--memory-noise-cpu-affinity` when a controlled CPU placement is required.
+
+For example, compare baseline and four-worker memory contention:
+
+```sh
+sudo -v
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config tools/realsense_steady_bench/configs/parameter_exploration_5min.json \
+  --policies other rr \
+  --cpu-noise-modes none \
+  --memory-noise-modes none fixed_copy \
+  --memory-noise-workers 4 \
+  --memory-noise-buffer-size-mib 64 \
+  --gpu-noise-modes none \
+  --usb-storage-noise-modes none \
+  --nb-runs 3 \
+  --serial CAMERA_SERIAL \
+  --results-dir tools/realsense_steady_bench/results/memory_copy_4workers_5min
+```
+
+This creates 24 runs:
+
+```text
+2 workloads x 2 policies x 2 memory-noise modes x 3 repetitions
+```
+
+The runner waits for ten seconds of copy progress before camera startup. Each
+record contains payload-copy MiB/s, an estimated read-plus-write memory traffic
+rate, allocated bytes, buffer size, worker count, CPU equivalents, affinity,
+and `CLOCK_BOOTTIME` boundaries. The read-plus-write rate is an algorithmic
+estimate of two transferred bytes per copied payload byte, not a hardware
+memory-controller counter.
+
 ## Read-Only USB Storage Noise
 
 The `sequential_read` mode continuously reads an unmounted whole USB disk using
@@ -253,7 +298,7 @@ Optional controls are `--usb-storage-warmup-seconds`,
 The formal GPU-interference condition is `mobilenet_v2_vulkan`. It continuously
 executes the pinned ncnn MobileNetV2 224x224x3 computation graph on a hardware
 Vulkan device. `none` is the paired baseline. Synthetic Vulkan arithmetic and
-memory-copy loops, ResNet18, and YOLO are intentionally not exposed as formal
+GPU memory-copy loops, ResNet18, and YOLO are intentionally not exposed as formal
 benchmark modes.
 
 The graph uses deterministic zero weights and a fixed input tensor. Classification
@@ -341,6 +386,12 @@ cpu_noise_summary.json
 cpu_noise_process.json
 cpu_noise_stdout.txt
 cpu_noise_stderr.txt
+memory_noise_configuration.json
+memory_noise_ready.json
+memory_noise_summary.json
+memory_noise_process.json
+memory_noise_stdout.txt
+memory_noise_stderr.txt
 gpu_noise_configuration.json
 gpu_noise_ready.json
 gpu_noise_summary.json
