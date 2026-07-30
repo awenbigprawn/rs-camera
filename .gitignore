@@ -93,3 +93,6 @@ __pycache__/
 
 # Generated steady-state benchmark data
 /tools/realsense_steady_bench/results/
+
+# Raspberry Pi campaign results and system backups
+/results/
