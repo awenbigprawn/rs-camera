@@ -1,0 +1,73 @@
+{
+  "description": "One-minute D435 steady-state timing trace for the representative and stress workloads.",
+  "notes": [
+    "Use this matrix for LiME scheduler tracing after the untraced ten-minute performance runs.",
+    "Each case excludes a ten-second warm-up and then measures one minute.",
+    "Command-line serials select the cameras and override camera_count.",
+    "The shorter trace limits eBPF storage and tracing perturbation while retaining thousands of frame periods."
+  ],
+  "cases": [
+    {
+      "case_id": "representative_depth_color_30fps_60s_trace",
+      "workload": {
+        "class": "representative_trace",
+        "measurement_seconds": 60,
+        "depth": "848x480_Z16_30fps",
+        "color": "640x480_RGB8_30fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "direct",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": [],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 1800,
+        "warmup_frames": 300,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "stress_all_streams_60fps_60s_trace",
+      "workload": {
+        "class": "stress_trace",
+        "measurement_seconds": 60,
+        "depth": "848x480_Z16_60fps",
+        "color": "960x540_RGB8_60fps",
+        "infrared": "IR1+IR2_848x480_Y8_60fps"
+      },
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "direct",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": [],
+        "stream_mode": "d435_all",
+        "delivery": "wait",
+        "frames": 3600,
+        "warmup_frames": 600,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      }
+    }
+  ]
+}

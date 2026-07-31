@@ -60,6 +60,29 @@ campaign:
 - the round-robin timeslice;
 - active clocksource.
 
+### 2.1 Currently available cameras and dataset provenance
+
+The executable experiment scope is currently limited to one- and two-camera
+conditions because only two D435 units are available. Three- and four-camera
+scalability remains a planned extension and must not be inferred from the
+two-camera results.
+
+Camera serial numbers are part of the experimental condition, not incidental
+metadata. D435 devices expose distinct librealsense firmware serials and USB
+descriptor serials on this platform. The currently connected physical cameras
+map as follows:
+
+| librealsense firmware serial | USB descriptor serial | Raspberry Pi port |
+|---|---|---|
+| `948122073863` | `948123020218` | `3-1` |
+| `327122075717` | `328323144345` | `5-1` |
+
+Benchmark `--serial` arguments use `RS2_CAMERA_INFO_SERIAL_NUMBER`, namely the
+librealsense firmware serials. USB topology and recovery code may additionally
+record the descriptor serials. A difference between these two namespaces must
+not be interpreted as a camera replacement. The 2026-07-30--31 baseline and
+the 2026-07-31 recovery rerun use the same two physical cameras.
+
 ## 3. Independent Variables
 
 ### 3.1 Kernel
@@ -143,13 +166,16 @@ V4L2 wire format, and conversion threads must therefore be documented.
 camera_count:
   1
   2
-  3
-  4
 ```
 
 All cameras in one run use the same workload. Each camera has an independent
 pipeline and application wait thread. Camera serial numbers and their mapping
 to pipeline indices must be recorded.
+
+The current paper-data campaign evaluates one camera and both available
+cameras. Counts of three and four are deferred until additional matched D435
+units are available; they remain a future scalability extension rather than
+empty cells in the present matrix.
 
 ### 3.5 Noise
 
@@ -813,6 +839,83 @@ one-hour runs.
 
 Use staged experiments instead.
 
+### Current two-camera campaign status (2026-07-31)
+
+The 2026-07-30--31 pilot baseline covered:
+
+```text
+kernel: default, PREEMPT_RT
+camera_count: 1, 2
+policy: OTHER, RR, FIFO
+workload: representative, stress
+noise: none
+performance run: 10 min, 3 repetitions
+LiME timing trace: 60 s, 1 repetition
+```
+
+This is 96 logical rows. Ninety-three completed successfully. The three failed
+rows are the `OTHER`, `RR`, and `FIFO` policies for the following single
+experimental cell:
+
+```text
+kernel: linux_6_12_default_btf
+camera_count: 2
+workload: stress_all_streams_60fps_60s_trace
+trace: LiME, 60 s
+hardware pair: 948122073863, 327122075717
+failure: 327122075717: Frame didn't arrive within 1500
+```
+
+Those failures occurred before the shared steady-state warm-up barrier and
+before the steady runner implemented full composite-device recovery. They are
+retained as failed startup outcomes.
+
+The missing cell was rerun on 2026-07-31 with the same physical cameras and the
+recovery-enabled runner. All three policies completed on `attempt-1`; therefore
+no reset was required in this supplemental run:
+
+| Policy | Timeouts | Inferred stream drops | Measurement time (s) | Maximum delivery gap (ms) | Recovery count |
+|---|---:|---:|---:|---:|---:|
+| `SCHED_OTHER` | 0 | 3 | 60.476 | 22.195 | 0 |
+| `SCHED_RR:80` | 0 | 0 | 60.476 | 17.549 | 0 |
+| `SCHED_FIFO:80` | 0 | 4,895 | 67.587 | 135.450 | 0 |
+
+A successful process exit means that both pipelines completed their requested
+number of deliveries; it does not imply zero frame loss. Drops are inferred
+from frame-number gaps and summed across cameras and streams. The large FIFO
+result is not an isolated counter anomaly. In the three untraced ten-minute
+non-RT two-camera stress runs, the observed ranges were 34--44 drops for
+`OTHER`, 3,082--7,350 for `RR`, and 1,472--23,367 for `FIFO`. Under
+`PREEMPT_RT`, the corresponding ranges were 6--15, 20--114, and 30--73. These
+are preliminary observations that require the planned repetitions and
+boot-block control before inferential claims.
+
+On any future pre-barrier failure, preserve the failed attempt, firmware-reset
+both cameras, reset both parent composite USB devices (all Depth, RGB, and IR
+interfaces), wait for both serials to re-enumerate, and retry only that logical
+policy row. Do not retry failures that occur after `steady_state_begin`.
+
+The remaining two-camera study is prioritized as follows:
+
+1. extend every no-noise baseline cell to five untraced ten-minute repetitions
+   and three 60-second LiME repetitions across both kernels, one and two
+   cameras, both workloads, and `OTHER`, `RR`, and `FIFO`;
+2. complete the startup characterization, while keeping its run count smaller
+   than the steady-state study because startup is not the primary endpoint;
+3. complete the independent Timerlat minimum matrix under both kernels;
+4. screen CPU, memory, GPU, and camera-induced USB interference, then retain a
+   small causal subset for formal repetitions;
+5. calibrate and validate per-thread `SCHED_DEADLINE` reservations from the
+   no-noise and selected-interference traces;
+6. run selected 60-minute baseline, worst-case, and best-policy validations.
+
+The original failed cell and the three supplemental rows remain separate in
+the archived dataset. Because all supplemental rows succeeded on their first
+attempt, this run completed the missing timing measurements but did not exercise
+the physical reset path. A later natural startup failure must retain its failed
+attempt and recovery evidence; an intentional fault-injection recovery check
+must be labelled as validation and excluded from performance comparisons.
+
 ### Stage A: parameter exploration
 
 ```text
@@ -829,14 +932,18 @@ repetitions: 3
 
 ```text
 kernel: default, PREEMPT_RT
-camera_count: 1
+camera_count: 1, 2
 policy: OTHER, RR, FIFO
 workload: representative, stress
 noise: none
+untraced performance target: 10 min, 5 repetitions per cell
+LiME timing target: 60 s, 3 repetitions per cell
 ```
 
 Use this stage to complete the thread timing model and prepare deadline
-parameters.
+parameters. The existing three performance repetitions and one timing
+repetition are retained, so the baseline extension normally adds two of each
+rather than restarting completed cells.
 
 ### Stage C: SCHED_DEADLINE calibration
 
@@ -853,7 +960,7 @@ Validate reservations and admission before multi-camera scaling.
 
 ```text
 kernel: default, PREEMPT_RT
-camera_count: 1, 2, 3, 4
+camera_count: 1, 2 (current campaign); 3, 4 (deferred extension)
 policy: OTHER and the best real-time policy
 workload: representative, stress
 noise: none
@@ -863,7 +970,7 @@ noise: none
 
 ```text
 kernel: default, PREEMPT_RT
-camera_count: 1 and maximum feasible count
+camera_count: 1 and 2 (the current maximum feasible count)
 policy: OTHER and the best real-time policy
 workload: representative, stress
 noise: none, cpu_busy, memory_fixed_copy, shi_tomasi, usb_storage_sequential_read, gpu_mobilenet_v2_vulkan
