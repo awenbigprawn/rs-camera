@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any, Dict, Iterable, List
 
@@ -258,6 +260,7 @@ class RealSenseSteadyBench(Benchmark):
         policy: str,
         summary_path: Path,
         events_path: Path,
+        deadline_profile_path: Path | None = None,
     ) -> List[str]:
         command = scheduler_prefix(policy, self._priority)
 
@@ -278,6 +281,7 @@ class RealSenseSteadyBench(Benchmark):
             ("delivery", "--delivery"),
             ("frames", "--frames"),
             ("warmup_frames", "--warmup-frames"),
+            ("deadline_apply_after_frames", "--deadline-apply-after-frames"),
             ("frame_timeout_ms", "--frame-timeout-ms"),
             ("startup_timeout_ms", "--startup-timeout-ms"),
             ("measurement_timeout_ms", "--measurement-timeout-ms"),
@@ -290,6 +294,9 @@ class RealSenseSteadyBench(Benchmark):
         for key, flag in fields:
             if key in probe and probe[key] is not None:
                 command += [flag, str(probe[key])]
+        if policy == "deadline":
+            profile = deadline_profile_path or Path(str(probe["deadline_profile"]))
+            command += ["--deadline-profile", str(profile)]
         command += [
             "--summary-output",
             str(summary_path),
@@ -342,9 +349,33 @@ class RealSenseSteadyBench(Benchmark):
         after = attempt_dir / "topology_after.json"
         self._system_controls.snapshot_topology(before)
 
+        deadline_profile_copy = None
+        deadline_profile_sha256 = ""
+        if policy == "deadline":
+            deadline_profile_source = Path(
+                str(case.get("probe", {})["deadline_profile"])
+            ).resolve()
+            deadline_profile_copy = attempt_dir / "deadline_profile.csv"
+            shutil.copy2(deadline_profile_source, deadline_profile_copy)
+            deadline_profile_sha256 = hashlib.sha256(
+                deadline_profile_copy.read_bytes()
+            ).hexdigest()
+            metadata_source = deadline_profile_source.with_suffix(
+                deadline_profile_source.suffix + ".json"
+            )
+            if metadata_source.is_file():
+                shutil.copy2(
+                    metadata_source,
+                    attempt_dir / "deadline_profile.csv.json",
+                )
+
         command = traced_command(
             scheduled_command=self._scheduled_probe(
-                case, policy, summary_path, events_path
+                case,
+                policy,
+                summary_path,
+                events_path,
+                deadline_profile_path=deadline_profile_copy,
             ),
             tracer=self._tracer,
             lifecycle_path=lifecycle_path,
@@ -359,6 +390,10 @@ class RealSenseSteadyBench(Benchmark):
             "attempt": attempt,
             "command": command,
             "record_data_dir": str(attempt_dir),
+            "deadline_profile_copy": (
+                str(deadline_profile_copy) if deadline_profile_copy else ""
+            ),
+            "deadline_profile_sha256": deadline_profile_sha256,
         }
         (attempt_dir / "attempt_manifest.json").write_text(
             json.dumps(attempt_manifest, indent=2, sort_keys=True) + "\n",
@@ -463,7 +498,9 @@ class RealSenseSteadyBench(Benchmark):
             "schema_version": 2,
             "case_id": case_id,
             "policy_requested": POLICY_NAMES[policy],
-            "priority_requested": 0 if policy == "other" else self._priority,
+            "priority_requested": (
+                0 if policy in {"other", "deadline"} else self._priority
+            ),
             "backend": self._system_controls.backend_name,
             "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
             "lime_enabled": self._use_lime,
@@ -478,6 +515,11 @@ class RealSenseSteadyBench(Benchmark):
             "max_attempts_per_run": self._max_attempts_per_run,
             **self._noise_suite.manifest(noise_modes),
             "clock": "CLOCK_BOOTTIME",
+            "deadline_profile_source": (
+                str(case.get("probe", {}).get("deadline_profile", ""))
+                if policy == "deadline"
+                else ""
+            ),
         }
         (record_dir / "run_manifest.json").write_text(
             json.dumps(base_manifest, indent=2, sort_keys=True) + "\n",

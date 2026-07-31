@@ -14,8 +14,24 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "rs_camera/thread_trace_api.h"
+
 #define TRACE_MAX_STACK 10
 #define TRACE_LINE_SIZE 4096
+#define TRACE_MAX_THREADS 512
+
+struct trace_live_thread
+{
+    pid_t tid;
+    uint64_t creation_sequence;
+    int alive;
+    char signature[RS_THREAD_TRACE_SIGNATURE_SIZE];
+};
+
+static pthread_mutex_t trace_registry_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct trace_live_thread trace_registry[TRACE_MAX_THREADS];
+static size_t trace_registry_count = 0;
+static uint64_t trace_next_creation_sequence = 1;
 
 struct trace_start_context
 {
@@ -23,6 +39,8 @@ struct trace_start_context
     void *arg;
     pid_t parent_tid;
     uint64_t create_timestamp_ns;
+    uint64_t creation_sequence;
+    char signature[RS_THREAD_TRACE_SIGNATURE_SIZE];
 };
 
 static int trace_fd = -1;
@@ -46,9 +64,127 @@ static uint64_t trace_now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+static void append_fmt(char **p, char *end, const char *fmt, ...);
+
 static pid_t trace_gettid(void)
 {
     return (pid_t)syscall(SYS_gettid);
+}
+
+static const char *trace_basename(const char *path)
+{
+    const char *slash;
+    if (!path)
+        return "";
+    slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static void trace_build_signature(void *entry,
+                                  void **frames,
+                                  int frame_count,
+                                  char *output,
+                                  size_t output_size)
+{
+    Dl_info entry_info;
+    char entry_module[256] = "";
+    char *position = output;
+    char *end = output + output_size;
+    int included = 0;
+
+    if (output_size == 0)
+        return;
+    output[0] = '\0';
+    memset(&entry_info, 0, sizeof(entry_info));
+    if (dladdr(entry, &entry_info) && entry_info.dli_fname)
+        snprintf(entry_module, sizeof(entry_module), "%s",
+                 trace_basename(entry_info.dli_fname));
+
+    if (strcmp(entry_module, "realsense_steady_probe") == 0)
+        append_fmt(&position, end, "entry=%s", entry_module);
+    else
+        append_fmt(&position, end, "entry=%s@0x%" PRIxPTR,
+                   entry_module,
+                   entry_info.dli_fbase
+                       ? (uintptr_t)entry - (uintptr_t)entry_info.dli_fbase
+                       : (uintptr_t)entry);
+
+    for (int index = 0; index < frame_count && included < 6; ++index)
+    {
+        Dl_info info;
+        const char *module;
+        if (!dladdr(frames[index], &info) || !info.dli_fname)
+            continue;
+        module = trace_basename(info.dli_fname);
+        if (strstr(module, "libtrace_pthreads.so") != NULL)
+            continue;
+        if (entry_module[0] && strcmp(module, entry_module) == 0)
+            continue;
+        if (strcmp(module, "realsense_steady_probe") == 0)
+            append_fmt(&position, end, "|%s", module);
+        else
+            append_fmt(&position, end, "|%s@0x%" PRIxPTR,
+                       module,
+                       (uintptr_t)frames[index] - (uintptr_t)info.dli_fbase);
+        ++included;
+    }
+}
+
+static void trace_registry_add(const struct trace_start_context *ctx)
+{
+    pthread_mutex_lock(&trace_registry_mutex);
+    if (trace_registry_count < TRACE_MAX_THREADS)
+    {
+        struct trace_live_thread *record = &trace_registry[trace_registry_count++];
+        memset(record, 0, sizeof(*record));
+        record->tid = trace_gettid();
+        record->creation_sequence = ctx->creation_sequence;
+        record->alive = 1;
+        snprintf(record->signature, sizeof(record->signature), "%s", ctx->signature);
+    }
+    pthread_mutex_unlock(&trace_registry_mutex);
+}
+
+static void trace_registry_exit(pid_t tid)
+{
+    pthread_mutex_lock(&trace_registry_mutex);
+    for (size_t index = trace_registry_count; index > 0; --index)
+    {
+        struct trace_live_thread *record = &trace_registry[index - 1];
+        if (record->tid == tid && record->alive)
+        {
+            record->alive = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&trace_registry_mutex);
+}
+
+__attribute__((visibility("default")))
+size_t rs_thread_trace_snapshot(struct rs_thread_trace_info *records,
+                                size_t capacity)
+{
+    size_t live = 0;
+    pthread_mutex_lock(&trace_registry_mutex);
+    for (size_t index = 0; index < trace_registry_count; ++index)
+    {
+        const struct trace_live_thread *source = &trace_registry[index];
+        if (!source->alive)
+            continue;
+        if (records && live < capacity)
+        {
+            struct rs_thread_trace_info *destination = &records[live];
+            memset(destination, 0, sizeof(*destination));
+            destination->size = sizeof(*destination);
+            destination->tid = source->tid;
+            destination->creation_sequence = source->creation_sequence;
+            snprintf(destination->signature, sizeof(destination->signature),
+                     "%s", source->signature);
+        }
+        ++live;
+    }
+    pthread_mutex_unlock(&trace_registry_mutex);
+    return live;
 }
 
 static void trace_load_real_symbols(void)
@@ -249,9 +385,15 @@ static void trace_emit_thread_start(struct trace_start_context *ctx)
                (long)ctx->parent_tid,
                (uintptr_t)self);
     append_address_info(&p, end, "entry", ctx->start_routine);
-    append_fmt(&p, end, ",\"arg_address\":\"0x%" PRIxPTR "\",\"create_timestamp_ns\":%" PRIu64 ",\"name\":",
+    append_fmt(&p, end,
+               ",\"arg_address\":\"0x%" PRIxPTR
+               "\",\"create_timestamp_ns\":%" PRIu64
+               ",\"creation_sequence\":%" PRIu64 ",\"signature\":",
                (uintptr_t)ctx->arg,
-               ctx->create_timestamp_ns);
+               ctx->create_timestamp_ns,
+               ctx->creation_sequence);
+    append_json_string(&p, end, ctx->signature);
+    append_fmt(&p, end, ",\"name\":");
     append_json_string(&p, end, name);
     append_fmt(&p, end, "}");
     trace_write_line(line, p);
@@ -297,9 +439,11 @@ static void *trace_start_trampoline(void *opaque)
     trace_tls_entry = (void *)ctx.start_routine;
     trace_tls_parent_tid = ctx.parent_tid;
     trace_tls_start_ns = trace_now_ns();
+    trace_registry_add(&ctx);
     trace_emit_thread_start(&ctx);
 
     void *retval = ctx.start_routine(ctx.arg);
+    trace_registry_exit(trace_gettid());
     trace_emit_thread_exit("return", retval);
     return retval;
 }
@@ -341,6 +485,13 @@ int pthread_create(pthread_t *thread,
         ctx->arg = arg;
         ctx->parent_tid = caller_tid;
         ctx->create_timestamp_ns = timestamp_ns;
+        ctx->creation_sequence =
+            __atomic_fetch_add(&trace_next_creation_sequence, 1, __ATOMIC_RELAXED);
+        trace_build_signature((void *)start_routine,
+                              frames,
+                              frame_count,
+                              ctx->signature,
+                              sizeof(ctx->signature));
         result = real_pthread_create(thread, attr, trace_start_trampoline, ctx);
         if (result != 0)
             free(ctx);
@@ -459,6 +610,7 @@ void pthread_exit(void *retval)
     if (!trace_guard)
     {
         trace_guard = 1;
+        trace_registry_exit(trace_gettid());
         trace_emit_thread_exit("pthread_exit", retval);
         trace_guard = 0;
     }

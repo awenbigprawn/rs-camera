@@ -159,6 +159,16 @@ def parse_steady_results(
         "error": data.get("error", "summary file missing"),
         "backend": backend_name,
         "policy_requested": policy_names[str(run_variables["policy"])],
+        "process_launch_policy_effective": data.get("scheduler", {}).get(
+            "policy", ""
+        ),
+        "main_thread_policy_effective": data.get("scheduler", {}).get(
+            "main_thread_policy", data.get("scheduler", {}).get("policy", "")
+        ),
+        "steady_worker_policy_effective": data.get("scheduler", {}).get(
+            "steady_worker_policy", ""
+        ),
+        "deadline_profile_applied": data.get("deadline") is not None,
         "cpu_noise_mode": run_variables["cpu_noise"],
         "cpu_noise_enabled": run_variables["cpu_noise"] != "none",
         "memory_noise_mode": run_variables["memory_noise"],
@@ -194,6 +204,8 @@ def parse_steady_results(
         result,
     )
     flatten("wait_ms", aggregate.get("wait_ms", {}), result)
+    if data.get("deadline") is not None:
+        flatten("deadline", data["deadline"], result)
     _add_camera_results(result, data)
     _add_trace_results(result, selected_dir)
     _add_kernel_results(result, selected_dir)

@@ -24,6 +24,9 @@ from parse_startup_trace import (  # noqa: E402
 )
 
 
+MAIN_THREAD_SIGNATURE = "process-main"
+
+
 def percentile(values: Iterable[float], quantile: float) -> float:
     ordered = sorted(float(value) for value in values)
     if not ordered:
@@ -157,6 +160,29 @@ def parse_steady_trace(
     )
     lime_events, policies = load_lime(lime_dir, app_tgid)
 
+    profile_instances: Dict[int, int] = {}
+    signature_counts: Dict[str, int] = defaultdict(int)
+    for record in sorted(
+        records,
+        key=lambda item: int(item.get("started_ns") or item.get("created_ns") or 0),
+    ):
+        tid_value = record.get("tid")
+        signature = (
+            MAIN_THREAD_SIGNATURE
+            if str(record.get("name") or "") == "main"
+            else str(record.get("signature") or "")
+        )
+        thread_begin = int(record.get("started_ns") or record.get("created_ns") or steady_begin)
+        thread_end = int(record.get("exited_ns") or steady_end)
+        if (
+            tid_value is None
+            or not signature
+            or min(steady_end, thread_end) <= max(steady_begin, thread_begin)
+        ):
+            continue
+        signature_counts[signature] += 1
+        profile_instances[int(tid_value)] = signature_counts[signature]
+
     interval_rows: List[Dict[str, Any]] = []
     activation_rows: List[Dict[str, Any]] = []
     thread_rows: List[Dict[str, Any]] = []
@@ -172,6 +198,11 @@ def parse_steady_trace(
             continue
 
         name = str(record.get("name") or "")
+        signature = (
+            MAIN_THREAD_SIGNATURE
+            if name == "main"
+            else str(record.get("signature") or "")
+        )
         intervals, _, _ = scheduler_intervals(
             lime_events.get(tid, []),
             begin,
@@ -201,11 +232,27 @@ def parse_steady_trace(
             float(row["duration_ms"]) for row in intervals if row["state"] == "sleeping"
         )
         lifetime_ms = (end - begin) / 1_000_000
-        policy_values = policies.get(tid, [])
+        policy_values: List[tuple[str, str]] = []
+        for event in lime_events.get(tid, []):
+            if not begin <= int(event["ts"]) <= end:
+                continue
+            policy_value = (
+                str(event.get("_policy") or ""),
+                str(event.get("_priority") or ""),
+            )
+            if policy_value not in policy_values:
+                policy_values.append(policy_value)
+        if not policy_values:
+            policy_values = policies.get(tid, [])
         thread_rows.append(
             {
                 "tid": tid,
                 "name": name,
+                "signature": signature,
+                "profile_instance": profile_instances.get(tid, 0),
+                "creation_sequence": record.get("creation_sequence"),
+                "entry_module": str(record.get("entry_module") or ""),
+                "entry_module_offset": str(record.get("entry_module_offset") or ""),
                 "policy": "|".join(value[0] for value in policy_values) or "UNKNOWN",
                 "priority": "|".join(value[1] for value in policy_values if value[1]),
                 "lifetime_in_window_ms": lifetime_ms,

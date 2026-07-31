@@ -119,6 +119,33 @@ def cycle_at(timestamp_ns: Optional[int], bounds: Dict[int, Tuple[int, int]]) ->
     return 0
 
 
+
+def thread_signature(event: Dict[str, Any]) -> str:
+    """Reproduce the preload tracer's ASLR-independent creation-stack key."""
+    explicit = str(event.get("signature") or "")
+    if explicit:
+        return explicit
+    entry_module = Path(str(event.get("entry_module") or "")).name
+    entry_offset = str(event.get("entry_module_offset") or event.get("entry_address") or "0x0")
+    parts = [
+        f"entry={entry_module}"
+        if entry_module == "realsense_steady_probe"
+        else f"entry={entry_module}@{entry_offset}"
+    ]
+    included = 0
+    for frame in event.get("stack", []):
+        if not isinstance(frame, dict):
+            continue
+        module = Path(str(frame.get("module") or "")).name
+        if not module or "libtrace_pthreads.so" in module or module == entry_module:
+            continue
+        offset = str(frame.get("module_offset") or frame.get("address") or "0x0")
+        parts.append(module if module == "realsense_steady_probe" else f"{module}@{offset}")
+        included += 1
+        if included == 6:
+            break
+    return "|".join(parts)
+
 def lifecycle_records(
     events: List[Dict[str, Any]],
     bounds: Dict[int, Tuple[int, int]],
@@ -133,7 +160,8 @@ def lifecycle_records(
             "tid": None, "tgid": None, "pthread_value": "", "name": "",
             "parent_tid": None, "created_ns": None, "started_ns": None,
             "exited_ns": None, "joined_ns": None, "joined_by": None,
-            "detached_by": None, "cycle": 0,
+            "detached_by": None, "cycle": 0, "creation_sequence": None,
+            "signature": "", "entry_module": "", "entry_module_offset": "",
         }
         record.update(values)
         records.append(record)
@@ -169,6 +197,10 @@ def lifecycle_records(
                 parent_tid=event.get("caller_tid"),
                 created_ns=timestamp,
                 cycle=cycle_at(timestamp, bounds),
+                creation_sequence=event.get("creation_sequence"),
+                signature=thread_signature(event),
+                entry_module=event.get("entry_module", ""),
+                entry_module_offset=event.get("entry_module_offset", ""),
             )
             by_create[(pthread_value, int(timestamp or 0))] = record
         elif kind == "thread_start":
@@ -187,6 +219,20 @@ def lifecycle_records(
                 parent_tid=event.get("parent_tid", record.get("parent_tid")),
                 started_ns=timestamp,
                 name=event.get("name", "") or record.get("name", ""),
+                creation_sequence=event.get(
+                    "creation_sequence", record.get("creation_sequence")
+                ),
+                signature=(
+                    event.get("signature", "")
+                    or record.get("signature", "")
+                    or thread_signature(event)
+                ),
+                entry_module=event.get(
+                    "entry_module", record.get("entry_module", "")
+                ),
+                entry_module_offset=event.get(
+                    "entry_module_offset", record.get("entry_module_offset", "")
+                ),
             )
             by_tid[int(event["tid"])].append(record)
         elif kind == "thread_name":

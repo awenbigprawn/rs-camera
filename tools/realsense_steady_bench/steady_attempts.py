@@ -37,8 +37,11 @@ def camera_descriptors(
 def _classify_attempt(summary: Mapping[str, Any]) -> AttemptDecision:
     success = bool(summary.get("success", False))
     has_measurement_started = measurement_started(summary)
+    error = str(summary.get("error", ""))
     if success:
         phase = "none"
+    elif error.startswith("SCHED_DEADLINE setup failed:"):
+        phase = "scheduler_setup"
     elif has_measurement_started:
         phase = "measurement"
     else:
@@ -47,7 +50,8 @@ def _classify_attempt(summary: Mapping[str, Any]) -> AttemptDecision:
         success=success,
         failure_phase=phase,
         retry=not success and phase == "startup",
-        error=str(summary.get("error", "")),
+        recover=not success and phase != "scheduler_setup",
+        error=error,
         metadata={"measurement_started": has_measurement_started},
     )
 

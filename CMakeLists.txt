@@ -50,7 +50,11 @@ endif()
 add_executable(smallest_test src/smallest_test.cpp)
 add_executable(d435_sensor_probe src/d435_sensor_probe.cpp)
 add_executable(realsense_thread_lifecycle_probe src/realsense_thread_lifecycle_probe.cpp)
-add_executable(realsense_steady_probe src/realsense_steady_probe.cpp)
+add_executable(
+    realsense_steady_probe
+    src/realsense_steady_probe.cpp
+    src/deadline_scheduler.cpp
+)
 
 target_compile_features(smallest_test PRIVATE cxx_std_17)
 target_compile_features(d435_sensor_probe PRIVATE cxx_std_17)
@@ -101,6 +105,7 @@ target_link_libraries(
     PRIVATE
         "${RS_CAMERA_LIBREALSENSE_TARGET}"
         Threads::Threads
+        ${CMAKE_DL_LIBS}
 )
 
 add_executable(

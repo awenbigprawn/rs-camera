@@ -184,6 +184,40 @@ class SteadyRunRetryTest(unittest.TestCase):
             self.assertEqual(attempts[0]["failure_phase"], "startup")
             self.assertTrue(attempts[1]["success"])
 
+    def test_scheduler_setup_failure_is_not_reset_or_retried(self):
+        bench = _FakeSteadyBench(
+            [
+                _summary(
+                    success=False,
+                    measurement_start=0,
+                    error="SCHED_DEADLINE setup failed: profile mismatch",
+                ),
+                _summary(success=True, measurement_start=223456),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            bench.single_run(
+                case_id="two-camera",
+                policy="deadline",
+                cpu_noise="none",
+                memory_noise="none",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+            summary = json.loads(
+                (record_dir / "steady_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(bench._recovery.calls, [])
+            self.assertEqual(summary["attempt_count"], 1)
+            self.assertFalse(summary["eventual_success"])
+            self.assertEqual(
+                summary["attempts"][0]["failure_phase"], "scheduler_setup"
+            )
+
     def test_measurement_failure_is_reset_but_not_retried(self):
         bench = _FakeSteadyBench(
             [

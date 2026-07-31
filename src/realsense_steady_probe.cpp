@@ -1,3 +1,4 @@
+#include "rs_camera/deadline_scheduler.h"
 #include "rs_camera/trace_marker.h"
 
 #include <librealsense2/rs.hpp>
@@ -32,6 +33,8 @@ struct options
     std::string delivery = "wait";
     std::string summary_output;
     std::string events_output;
+    std::string deadline_profile;
+    int deadline_apply_after_frames = 0;
     int camera_count = 1;
     int depth_width = 848;
     int depth_height = 480;
@@ -97,6 +100,7 @@ struct camera_metrics
     uint64_t first_measured_ns = 0;
     uint64_t last_measured_ns = 0;
     uint64_t last_delivery_ns = 0;
+    bool deadline_ready = false;
     bool warmed = false;
     bool completed = false;
     std::vector<double> delivery_interarrival_ms;
@@ -128,6 +132,7 @@ struct shared_control
     std::atomic<bool> measurement_enabled{false};
     std::atomic<bool> stop{false};
     std::atomic<uint64_t> origin_ns{0};
+    size_t deadline_ready_cameras = 0;
     size_t warmed_cameras = 0;
     size_t completed_cameras = 0;
     std::atomic<bool> failed{false};
@@ -178,6 +183,10 @@ options parse_args(int argc, char **argv)
             opts.summary_output = value(arg);
         else if (arg == "--events-output")
             opts.events_output = value(arg);
+        else if (arg == "--deadline-profile")
+            opts.deadline_profile = value(arg);
+        else if (arg == "--deadline-apply-after-frames")
+            opts.deadline_apply_after_frames = std::stoi(value(arg));
         else if (arg == "--help" || arg == "-h")
         {
             std::cout
@@ -193,7 +202,9 @@ options parse_args(int argc, char **argv)
                 << "  --fps N\n"
                 << "  --depth-width N --depth-height N\n"
                 << "  --color-width N --color-height N\n"
-                << "  --summary-output PATH --events-output PATH\n";
+                << "  --summary-output PATH --events-output PATH\n"
+                << "  --deadline-profile PATH       Apply per-thread SCHED_DEADLINE during warm-up\n"
+                << "  --deadline-apply-after-frames N  Per-camera pre-DEADLINE warm-up; zero is automatic\n";
             std::exit(0);
         }
         else
@@ -208,6 +219,17 @@ options parse_args(int argc, char **argv)
         throw std::runtime_error("Invalid warm-up or timeout value");
     if (opts.delivery != "wait" && opts.delivery != "callback")
         throw std::runtime_error("Unsupported delivery mode: " + opts.delivery);
+    if (opts.deadline_apply_after_frames < 0)
+        throw std::runtime_error("deadline-apply-after-frames must be non-negative");
+    if (!opts.deadline_profile.empty())
+    {
+        if (opts.warmup_frames < 2)
+            throw std::runtime_error(
+                "SCHED_DEADLINE requires at least two warm-up deliveries");
+        if (opts.deadline_apply_after_frames >= opts.warmup_frames)
+            throw std::runtime_error(
+                "deadline-apply-after-frames must be less than warmup-frames");
+    }
     return opts;
 }
 
@@ -396,6 +418,13 @@ void record_frame(camera_metrics &metrics,
                               stream.timestamp_domain});
 }
 
+int deadline_apply_threshold(const options &opts)
+{
+    if (opts.deadline_apply_after_frames > 0)
+        return opts.deadline_apply_after_frames;
+    return std::min(opts.fps, std::max(1, opts.warmup_frames / 10));
+}
+
 void record_delivery(camera_runtime &camera,
                      const rs2::frame &frame,
                      uint64_t host_ns,
@@ -403,6 +432,7 @@ void record_delivery(camera_runtime &camera,
                      const options &opts,
                      shared_control &control)
 {
+    bool became_deadline_ready = false;
     bool became_warm = false;
     bool became_complete = false;
     {
@@ -416,6 +446,13 @@ void record_delivery(camera_runtime &camera,
             if (!metrics.first_warmup_ns)
                 metrics.first_warmup_ns = host_ns;
             ++metrics.warmup_deliveries;
+            if (!opts.deadline_profile.empty() && !metrics.deadline_ready &&
+                metrics.warmup_deliveries >=
+                    static_cast<uint64_t>(deadline_apply_threshold(opts)))
+            {
+                metrics.deadline_ready = true;
+                became_deadline_ready = true;
+            }
             if (metrics.warmup_deliveries >= static_cast<uint64_t>(opts.warmup_frames))
             {
                 metrics.warmed = true;
@@ -451,6 +488,12 @@ void record_delivery(camera_runtime &camera,
         }
     }
 
+    if (became_deadline_ready)
+    {
+        std::lock_guard<std::mutex> lock(control.mutex);
+        ++control.deadline_ready_cameras;
+        control.cv.notify_all();
+    }
     if (became_warm)
     {
         std::lock_guard<std::mutex> lock(control.mutex);
@@ -531,6 +574,9 @@ std::string scheduler_policy()
     case SCHED_OTHER: return "SCHED_OTHER";
     case SCHED_RR: return "SCHED_RR";
     case SCHED_FIFO: return "SCHED_FIFO";
+#ifdef SCHED_DEADLINE
+    case SCHED_DEADLINE: return "SCHED_DEADLINE";
+#endif
     default: return "UNKNOWN";
     }
 }
@@ -572,7 +618,8 @@ void write_summary(const std::string &path,
                    uint64_t measurement_start_ns,
                    uint64_t measurement_end_ns,
                    bool success,
-                   const std::string &error)
+                   const std::string &error,
+                   const rs_camera::deadline_application *deadline_result)
 {
     std::ofstream out(path);
     if (!out)
@@ -604,16 +651,27 @@ void write_summary(const std::string &path,
     sched_param parameter{};
     sched_getparam(0, &parameter);
     out << "{\n"
-        << "  \"schema_version\": 2,\n"
+        << "  \"schema_version\": 3,\n"
         << "  \"success\": " << (success ? "true" : "false") << ",\n"
         << "  \"error\": " << quoted(error) << ",\n"
         << "  \"scheduler\": {\"policy\":" << quoted(scheduler_policy())
-        << ",\"priority\":" << parameter.sched_priority << "},\n"
+        << ",\"priority\":" << parameter.sched_priority
+        << ",\"main_thread_policy\":" << quoted(scheduler_policy())
+        << ",\"steady_worker_policy\":"
+        << quoted(deadline_result ? "SCHED_DEADLINE" : scheduler_policy())
+        << "},\n"
+        << "  \"deadline\": "
+        << (deadline_result
+                ? rs_camera::deadline_application_json(*deadline_result)
+                : "null")
+        << ",\n"
         << "  \"run\": {\"camera_count\":" << cameras.size()
         << ",\"stream_mode\":" << quoted(opts.stream_mode)
         << ",\"delivery\":" << quoted(opts.delivery)
         << ",\"frames_per_camera\":" << opts.frames
         << ",\"warmup_frames\":" << opts.warmup_frames
+        << ",\"deadline_apply_after_frames\":"
+        << (opts.deadline_profile.empty() ? 0 : deadline_apply_threshold(opts))
         << ",\"fps\":" << opts.fps
         << ",\"frame_timeout_ms\":" << opts.frame_timeout_ms
         << ",\"startup_timeout_ms\":" << opts.startup_timeout_ms << "},\n"
@@ -776,12 +834,59 @@ try
         }
     }
 
+    std::unique_ptr<rs_camera::deadline_application> deadline_result;
+    if (!opts.deadline_profile.empty())
+    {
+        {
+            std::unique_lock<std::mutex> lock(control.mutex);
+            const bool ready = control.cv.wait_for(
+                lock,
+                std::chrono::milliseconds(opts.startup_timeout_ms),
+                [&]() {
+                    return control.failed.load() ||
+                           control.deadline_ready_cameras == cameras.size();
+                });
+            if (!ready && !control.failed.load())
+            {
+                lock.unlock();
+                set_failure(
+                    control,
+                    "Timed out before the SCHED_DEADLINE warm-up transition");
+            }
+        }
+        if (!control.failed.load())
+        {
+            rs_trace_phase_marker("deadline_apply_begin");
+            try
+            {
+                deadline_result = std::make_unique<rs_camera::deadline_application>(
+                    rs_camera::apply_deadline_profile(opts.deadline_profile));
+                std::cout << "RS_DEADLINE {\"profile_entries\":"
+                          << deadline_result->profile_entries
+                          << ",\"live_threads\":" << deadline_result->live_threads
+                          << ",\"applied\":true}\n";
+                rs_trace_phase_marker("deadline_apply_end");
+            }
+            catch (const std::exception &error)
+            {
+                rs_trace_phase_marker("deadline_apply_error");
+                set_failure(
+                    control,
+                    std::string("SCHED_DEADLINE setup failed: ") + error.what());
+            }
+        }
+    }
+
+    if (!control.failed.load())
     {
         std::unique_lock<std::mutex> lock(control.mutex);
         const bool ready = control.cv.wait_for(
             lock,
             std::chrono::milliseconds(opts.startup_timeout_ms),
-            [&]() { return control.failed.load() || control.warmed_cameras == cameras.size(); });
+            [&]() {
+                return control.failed.load() ||
+                       control.warmed_cameras == cameras.size();
+            });
         if (!ready && !control.failed.load())
         {
             lock.unlock();
@@ -848,7 +953,8 @@ try
                       measurement_start_ns,
                       measurement_end_ns,
                       !control.failed.load(),
-                      control.error);
+                      control.error,
+                      deadline_result.get());
 
     std::cout << "RS_STEADY_RESULT {\"success\":" << (!control.failed.load() ? "true" : "false")
               << ",\"camera_count\":" << cameras.size()

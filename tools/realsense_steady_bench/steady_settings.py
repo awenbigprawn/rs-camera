@@ -12,7 +12,7 @@ from realsense_bench_common.settings import (
     PAPER_DROP_CACHES_BEFORE_RUN as CAMPAIGN_DROP_CACHES_BEFORE_RUN,
     PAPER_RT_PRIORITY as CAMPAIGN_RT_PRIORITY,
     PAPER_USB_KERNEL_DRIVER as CAMPAIGN_USB_KERNEL_DRIVER,
-    POLICY_NAMES,
+    POLICY_NAMES as BASE_POLICY_NAMES,
     REPO_ROOT,
     RSUSB_HELPER,
     TOOLS_DIR,
@@ -21,6 +21,7 @@ from realsense_bench_common.settings import (
 
 
 TOOL_DIR = TOOLS_DIR / "realsense_steady_bench"
+POLICY_NAMES = {**BASE_POLICY_NAMES, "deadline": "SCHED_DEADLINE"}
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-steady"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
 NCNN_MODEL_PARAM = (

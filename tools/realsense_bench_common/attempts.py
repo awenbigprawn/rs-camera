@@ -26,6 +26,7 @@ class AttemptDecision:
     success: bool
     failure_phase: str
     retry: bool
+    recover: bool = True
     error: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -115,6 +116,7 @@ def run_attempt_loop(
 
         if (
             not decision.success
+            and decision.recover
             and recovery_method != "none"
             and recover_attempt is not None
         ):

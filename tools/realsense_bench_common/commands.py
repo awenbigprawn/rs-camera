@@ -16,6 +16,10 @@ def scheduler_prefix(policy: str, priority: int) -> List[str]:
         return ["chrt", "--rr", str(priority)]
     if policy == "fifo":
         return ["chrt", "--fifo", str(priority)]
+    if policy == "deadline":
+        # Individual worker reservations are installed by the steady probe
+        # after camera warm-up. The process must start as SCHED_OTHER.
+        return ["chrt", "--other", "0"]
     raise ValueError(f"Unsupported policy: {policy}")
 
 
@@ -77,6 +81,8 @@ def build_pthread_tracer(
             "-fno-omit-frame-pointer",
             "-Wall",
             "-Wextra",
+            "-I",
+            str(source.resolve().parents[2] / "include"),
             "-o",
             str(output),
             str(source),

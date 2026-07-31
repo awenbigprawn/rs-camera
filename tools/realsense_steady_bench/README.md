@@ -161,6 +161,82 @@ retry and conceal that failure.
 Use `--no-lime` only for functional debugging. It keeps the pthread lifecycle
 trace but cannot produce scheduler execution-time distributions.
 
+## Per-thread SCHED_DEADLINE mode
+
+The deadline policy is a two-stage policy. The process and every
+camera/librealsense thread starts under SCHED_OTHER. After each camera has
+completed the initial part of warm-up, the probe maps the live worker pthreads
+to a previously generated temporal model and applies one reservation to every
+matched worker with sched_setattr(). The process main thread remains
+SCHED_OTHER because it is an aperiodic phase-control thread rather than a
+frame-processing worker. The cameras continue warming under SCHED_DEADLINE, and
+the probe emits steady_state_begin only after the complete warm-up interval.
+Startup work is therefore not charged to the steady-state reservations and the
+new policy has a stabilization interval before measured sampling.
+
+Generate a profile from one or, preferably, several independent SCHED_OTHER
+LiME attempts for exactly the same kernel, backend, probe build, camera count,
+delivery mode, and stream workload:
+
+~~~sh
+.venv/bin/python \
+  tools/realsense_steady_bench/generate_deadline_profile.py \
+  --trace-run PATH_TO_OTHER_ATTEMPT_1 \
+  --trace-run PATH_TO_OTHER_ATTEMPT_2 \
+  --trace-run PATH_TO_OTHER_ATTEMPT_3 \
+  --output tools/realsense_steady_bench/profiles/WORKLOAD.csv
+~~~
+
+The generator first merges burst activations into logical jobs. For thread
+\(i\), its default parameters are:
+
+~~~text
+runtime_i  = max(kernel minimum, 1.20 * maximum observed logical-job execution)
+deadline_i = period_i
+period_i   = min(kernel maximum, 0.91 * minimum stable logical-job period)
+~~~
+
+Execution fragments separated only by preemption remain in the same activation,
+and sleep-separated burst activations belonging to one model period are summed.
+The minimum period is taken only from the stable logical-period mode, not from a
+raw micro-gap inside a burst. The accompanying WORKLOAD.csv.json records all
+observations, clamping, formula constants, sources, and total reserved
+utilization. These are empirical reservation candidates, not WCET guarantees.
+
+Run the matching workload with the generated profile:
+
+~~~sh
+sudo -v
+
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config MATCHING_CONFIG.json \
+  --case MATCHING_CASE \
+  --policies deadline \
+  --deadline-profile tools/realsense_steady_bench/profiles/WORKLOAD.csv \
+  --nb-runs 1 \
+  --serial CAMERA_SERIAL \
+  --results-dir tools/realsense_steady_bench/results/deadline_smoke
+~~~
+
+By default, the transition occurs after 10 percent of the configured warm-up
+deliveries, capped at one second of frames. Override it with
+--deadline-apply-after-frames; the value must remain below --warmup-frames.
+
+The preload tracer identifies a worker by an ASLR-independent pthread creation
+stack plus its live instance number. It intentionally excludes the initial
+process main thread from profile generation and admission. Profile application
+is strict: all live worker pthreads must match exactly, every row must satisfy
+runtime <= deadline <= period, and every kernel admission request must succeed.
+A mismatch or partial admission restores already changed threads to SCHED_OTHER
+and aborts before measurement. Scheduler-configuration errors are not retried
+as camera failures. The attempt stores a copy and SHA-256 digest of the exact
+profile, and steady_summary.json records every TID and applied reservation.
+
+Do not reuse a profile after rebuilding librealsense or changing the kernel,
+stream configuration, number of cameras, or delivery mode. First collect new
+SCHED_OTHER traces. For paper results, pool the planned independent calibration
+traces rather than deriving a profile from a single trace.
+
 ## Long Single-Camera Run
 
 For a ten-minute, 30-frame/s acquisition:
