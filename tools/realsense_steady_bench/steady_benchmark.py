@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Any, Dict, Iterable, List
 
 from benchkit.benchmark import Benchmark
 
-from camera_recovery import CameraRecoveryConfig, MultiCameraFullReset
 from noise_workloads import (
     CpuBusyLoopNoise,
     CpuNoiseConfig,
@@ -24,7 +21,21 @@ from noise_workloads import (
     UsbStorageReadNoise,
 )
 from parse_steady_trace import parse_steady_trace
-from realsense_benchmark_utils import DropCachesBeforeRun
+from realsense_bench_common.commands import (
+    build_pthread_tracer,
+    scheduler_prefix,
+    traced_command,
+    validate_trace_environment,
+)
+from realsense_bench_common.recovery import (
+    CameraRecoveryConfig,
+    MultiCameraFullReset,
+)
+from realsense_bench_common.system_controls import (
+    SystemControlConfig,
+    SystemControls,
+)
+from realsense_bench_common.memory import DropCachesBeforeRun
 from steady_attempts import camera_descriptors, run_steady_attempts
 from steady_results import parse_steady_results
 from steady_settings import (
@@ -43,7 +54,6 @@ from steady_settings import (
     TOOL_DIR,
     TRACER_SOURCE,
 )
-from system_controls import SystemControlConfig, SystemControls
 
 
 class RealSenseSteadyBench(Benchmark):
@@ -200,13 +210,7 @@ class RealSenseSteadyBench(Benchmark):
         ]
 
     def prebuild_bench(self, **_kwargs: Any) -> int:
-        if self._use_lime and not self._lime.is_file():
-            raise RuntimeError(
-                f"LiME was not found at {self._lime}. Build the unmodified dependency with: "
-                "cargo build --release --manifest-path deps/lime-rtw/Cargo.toml"
-            )
-        if shutil.which("chrt") is None:
-            raise RuntimeError("chrt is required (normally provided by util-linux).")
+        validate_trace_environment(lime=self._lime, use_lime=self._use_lime)
         if self._drop_caches_before_run:
             self._memory_cleanup_hook.validate()
         self._noise_suite.validate_environment()
@@ -242,24 +246,7 @@ class RealSenseSteadyBench(Benchmark):
                 str(self._build_jobs),
             ]
         )
-        compiler = os.environ.get("CC", "cc")
-        subprocess.check_call(
-            [
-                compiler,
-                "-shared",
-                "-fPIC",
-                "-g",
-                "-O2",
-                "-fno-omit-frame-pointer",
-                "-Wall",
-                "-Wextra",
-                "-o",
-                str(self._tracer),
-                str(TRACER_SOURCE),
-                "-ldl",
-                "-pthread",
-            ]
-        )
+        build_pthread_tracer(output=self._tracer, source=TRACER_SOURCE)
         return 0
 
     def build_bench(self, **_kwargs: Any) -> None:
@@ -272,14 +259,7 @@ class RealSenseSteadyBench(Benchmark):
         summary_path: Path,
         events_path: Path,
     ) -> List[str]:
-        if policy == "other":
-            command = ["chrt", "--other", "0"]
-        elif policy == "rr":
-            command = ["chrt", "--rr", str(self._priority)]
-        elif policy == "fifo":
-            command = ["chrt", "--fifo", str(self._priority)]
-        else:
-            raise ValueError(f"Unsupported policy: {policy}")
+        command = scheduler_prefix(policy, self._priority)
 
         probe = case.get("probe", {})
         command.append(str(self._probe))
@@ -362,25 +342,17 @@ class RealSenseSteadyBench(Benchmark):
         after = attempt_dir / "topology_after.json"
         self._system_controls.snapshot_topology(before)
 
-        target = [
-            "env",
-            f"LD_PRELOAD={self._tracer}",
-            f"RS_THREAD_TRACE_FILE={lifecycle_path}",
-            *self._scheduled_probe(case, policy, summary_path, events_path),
-        ]
-        command = target
-        if self._use_lime:
-            command = [
-                str(self._lime),
-                "trace",
-                "--best-effort",
-                "-o",
-                str(lime_dir),
-                "--",
-                *target,
-            ]
-        if self._use_sudo:
-            command = ["sudo", "--preserve-env=LD_LIBRARY_PATH", *command]
+        command = traced_command(
+            scheduled_command=self._scheduled_probe(
+                case, policy, summary_path, events_path
+            ),
+            tracer=self._tracer,
+            lifecycle_path=lifecycle_path,
+            lime=self._lime,
+            lime_dir=lime_dir,
+            use_lime=self._use_lime,
+            use_sudo=self._use_sudo,
+        )
 
         attempt_manifest = {
             **base_manifest,

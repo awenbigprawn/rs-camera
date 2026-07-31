@@ -1,19 +1,28 @@
-"""Shared paths, fixed controls, and factor names for the steady campaign."""
+"""Steady-specific paths and experimental factor names."""
 
 from pathlib import Path
 
+from realsense_bench_common.settings import (
+    BENCHKIT_PATH,
+    CPU_LOCK_SCRIPT as CPU_LOCK,
+    CPU_RESTORE_SCRIPT as CPU_RESTORE,
+    DEFAULT_LIME,
+    PAPER_BACKEND as CAMPAIGN_BACKEND,
+    PAPER_CPU_FREQUENCY_MHZ as CAMPAIGN_CPU_FREQUENCY_MHZ,
+    PAPER_DROP_CACHES_BEFORE_RUN as CAMPAIGN_DROP_CACHES_BEFORE_RUN,
+    PAPER_RT_PRIORITY as CAMPAIGN_RT_PRIORITY,
+    PAPER_USB_KERNEL_DRIVER as CAMPAIGN_USB_KERNEL_DRIVER,
+    POLICY_NAMES,
+    REPO_ROOT,
+    RSUSB_HELPER,
+    TOOLS_DIR,
+    TRACER_SOURCE,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-TOOL_DIR = REPO_ROOT / "tools" / "realsense_steady_bench"
-TOOLS_DIR = REPO_ROOT / "tools"
-BENCHKIT_PATH = REPO_ROOT / "deps" / "benchkit"
+
+TOOL_DIR = TOOLS_DIR / "realsense_steady_bench"
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-steady"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
-DEFAULT_LIME = REPO_ROOT / "deps" / "lime-rtw" / "target" / "release" / "lime-rtw"
-TRACER_SOURCE = REPO_ROOT / "tools" / "realsense_thread_trace" / "trace_pthreads.c"
-CPU_LOCK = REPO_ROOT / "scripts" / "lock_cpu_freq.sh"
-CPU_RESTORE = REPO_ROOT / "scripts" / "restore_cpu_freq_default.sh"
-RSUSB_HELPER = REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
 NCNN_MODEL_PARAM = (
     REPO_ROOT / "deps" / "ncnn" / "benchmark" / "models" / "mobilenet_v2.param"
 )
@@ -22,13 +31,7 @@ DEFAULT_BROADCOM_VULKAN_ICD = Path(
 )
 
 
-# Fixed controls for the paper campaign. They are recorded as Benchkit
-# constants and in each run manifest, but are not experimental factors.
-CAMPAIGN_BACKEND = "v4l2"
-CAMPAIGN_USB_KERNEL_DRIVER = "uvcvideo"
-CAMPAIGN_CPU_FREQUENCY_MHZ = 1500
-CAMPAIGN_DROP_CACHES_BEFORE_RUN = True
-CAMPAIGN_RT_PRIORITY = 80
+# These paper controls are recorded but are not Cartesian factors.
 CAMPAIGN_RSUSB_USB_DEVICES: tuple[str, ...] = ()
 FIXED_CAMPAIGN_CONSTANTS = {
     "fixed_librealsense_backend": CAMPAIGN_BACKEND,
@@ -39,11 +42,6 @@ FIXED_CAMPAIGN_CONSTANTS = {
 }
 
 
-POLICY_NAMES = {
-    "other": "SCHED_OTHER",
-    "rr": "SCHED_RR",
-    "fifo": "SCHED_FIFO",
-}
 GPU_NOISE_MODES = ("none", "mobilenet_v2_vulkan")
 USB_STORAGE_NOISE_MODES = ("none", "sequential_read")
 CPU_NOISE_MODES = ("none", "busy_loop")

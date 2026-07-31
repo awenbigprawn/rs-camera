@@ -12,7 +12,13 @@ import json
 import math
 from pathlib import Path
 import statistics
+import sys
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+TOOLS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS_DIR))
+
+from realsense_bench_common.artifacts import resolve_selected_attempt
 
 
 STATE_COLORS = {
@@ -242,22 +248,24 @@ def selected_attempt_dirs(campaign_dir: Path, policy: str) -> List[Path]:
     attempts: List[Path] = []
     policy_component = f"policy-{policy}"
     for timing_path in campaign_dir.rglob("thread_timing.csv"):
-        attempt_dir = timing_path.parent
-        if policy_component not in attempt_dir.parts:
+        candidate_dir = timing_path.parent
+        if policy_component not in candidate_dir.parts:
             continue
-        run_dir = attempt_dir.parent
-        selected_path = run_dir / "selected_attempt.txt"
-        if selected_path.exists():
-            selected = selected_path.read_text(encoding="utf-8").strip()
-            if attempt_dir.name != f"attempt-{selected}":
-                continue
-        summary_path = attempt_dir / "summary.json"
+        run_dir = (
+            candidate_dir.parent
+            if candidate_dir.name.startswith("attempt-")
+            else candidate_dir
+        )
+        selected = resolve_selected_attempt(run_dir)
+        if selected.data_dir != candidate_dir.resolve():
+            continue
+        summary_path = candidate_dir / "summary.json"
         if not summary_path.exists():
             continue
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         if not summary.get("startup_result", {}).get("success", False):
             continue
-        attempts.append(attempt_dir)
+        attempts.append(candidate_dir)
     return sorted(attempts)
 
 

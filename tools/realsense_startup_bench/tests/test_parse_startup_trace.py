@@ -10,6 +10,7 @@ TOOL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_DIR))
 
 from parse_startup_trace import parse_startup_trace
+from realsense_bench_common.system_controls import SystemControls
 from run_startup_campaign import (
     RealSenseStartupBench,
     _run_campaign_with_cleanup,
@@ -17,6 +18,16 @@ from run_startup_campaign import (
 
 
 class RetryStartupRunTest(unittest.TestCase):
+    class _SystemControls:
+        def prepare_campaign(self, _record_dir):
+            return {"enabled": False, "policies": []}
+
+        def prepare_attempt(self, _attempt, _attempt_dir):
+            return None
+
+        def verify_cpu_frequency(self, _state):
+            return []
+
     class _FailThenSucceedBench(RealSenseStartupBench):
         def __init__(self):
             self._cycles = 10
@@ -40,6 +51,7 @@ class RetryStartupRunTest(unittest.TestCase):
             self._cpu_frequency_restore_needed = False
             self._probe = Path("/test/d435_sensor_probe")
             self._lime = Path("/test/lime-rtw")
+            self._system_controls = RetryStartupRunTest._SystemControls()
             self.recovery_calls = 0
 
         def _run_attempt(
@@ -90,7 +102,7 @@ class RetryStartupRunTest(unittest.TestCase):
             )
             return result
 
-    def test_full_reset_resets_firmware_then_composite_usb_device(self):
+    def test_full_reset_uses_shared_composite_device_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bench = object.__new__(RealSenseStartupBench)
@@ -99,26 +111,18 @@ class RetryStartupRunTest(unittest.TestCase):
             bench._use_sudo = False
             bench._recovery_wait_seconds = 1.2
             bench._recovery_reset_timeout_ms = 5000
-            completed = mock.Mock(
-                returncode=0,
-                stdout=(
-                    'RS_HARDWARE_RESET {"state":"requested"}\n'
-                    'RS_HARDWARE_RESET {"state":"complete"}\n'
-                ),
-                stderr="",
-            )
-            usb_result = {
+            expected = {
                 "attempted": True,
-                "method": "usb",
+                "method": "full-reset",
                 "success": True,
-                "target": "002/003",
+                "camera_count": 1,
+                "cameras": [{"serial": "test-serial", "success": True}],
             }
 
             with mock.patch(
-                "run_startup_campaign.subprocess.run", return_value=completed
-            ) as run_mock, mock.patch.object(
-                bench, "_recover_usb_device", return_value=usb_result
-            ) as usb_mock:
+                "run_startup_campaign.MultiCameraFullReset.recover",
+                return_value=expected,
+            ) as recover:
                 result = bench._recover_full_reset(
                     {
                         "physical_port": (
@@ -128,20 +132,15 @@ class RetryStartupRunTest(unittest.TestCase):
                     root,
                 )
 
-            self.assertTrue(result["success"])
-            self.assertTrue(result["hardware_reset"]["success"])
-            self.assertTrue(result["usb_reset"]["success"])
-            self.assertEqual(result["method"], "full-reset")
-            command = run_mock.call_args.args[0]
-            self.assertIn("--hardware-reset", command)
-            self.assertIn("--serial", command)
-            self.assertEqual(command[command.index("--reset-timeout-ms") + 1], "5000")
-            self.assertEqual(run_mock.call_args.kwargs["timeout"], 10.0)
-            usb_mock.assert_called_once()
-            written = json.loads(
-                (root / "recovery.json").read_text(encoding="utf-8")
+            self.assertEqual(result, expected)
+            cameras, record_dir = recover.call_args.args
+            self.assertEqual(record_dir, root)
+            self.assertEqual(len(cameras), 1)
+            self.assertEqual(cameras[0]["serial"], "test-serial")
+            self.assertEqual(
+                cameras[0]["physical_port"],
+                "/sys/devices/usb2/2-1/2-1:1.0/video4linux/video4",
             )
-            self.assertTrue(written["success"])
 
     def test_failed_attempt_is_recovered_and_same_run_is_retried(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -178,28 +177,13 @@ class RetryStartupRunTest(unittest.TestCase):
 
 
 class RsusbCleanupTest(unittest.TestCase):
-    def test_restore_v4l2_binding_invokes_bind_helper_with_sudo(self):
+    def test_restore_v4l2_binding_delegates_to_shared_controls(self):
         bench = object.__new__(RealSenseStartupBench)
-        bench._rsusb_usb_device = "3-1"
-        bench._rsusb_prepare_timeout_seconds = 10.0
-        bench._use_sudo = True
-        completed = mock.Mock(
-            returncode=0,
-            stdout=(
-                'RSUSB_UVC {"action":"bind","usb_device":"3-1",'
-                '"interfaces_changed":2}\n'
-            ),
-            stderr="",
-        )
+        bench._system_controls = mock.Mock()
 
-        with mock.patch(
-            "run_startup_campaign.subprocess.run", return_value=completed
-        ) as run_mock:
-            bench.restore_v4l2_binding()
+        bench.restore_v4l2_binding()
 
-        command = run_mock.call_args.args[0]
-        self.assertEqual(command[:2], ["sudo", "--non-interactive"])
-        self.assertEqual(command[-2:], ["bind", "3-1"])
+        bench._system_controls.restore_v4l2_binding.assert_called_once_with()
 
     def test_campaign_restores_v4l2_binding_after_success(self):
         campaign = mock.Mock()
@@ -255,14 +239,14 @@ class ParseStartupTraceTest(unittest.TestCase):
         self.assertIsNone(RealSenseStartupBench._depth_video_node("unknown"))
 
     def test_kernel_log_delta_uses_exact_run_window(self):
-        delta, error = RealSenseStartupBench._kernel_log_delta(
+        delta, error = SystemControls.kernel_delta(
             "old one\nold two\n",
             "old one\nold two\nnew one\nnew two\n",
         )
         self.assertEqual(delta, "new one\nnew two\n")
         self.assertEqual(error, "")
 
-        delta, error = RealSenseStartupBench._kernel_log_delta(
+        delta, error = SystemControls.kernel_delta(
             "lost anchor\n",
             "rotated buffer\n",
         )

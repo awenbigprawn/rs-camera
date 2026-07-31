@@ -16,8 +16,10 @@ and then records the same number of frame deliveries from every camera.
 | Operational inputs | camera serials, CPU/memory-noise worker counts and affinity, memory buffer size, frame override, repetitions, build jobs, and output path |
 | Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, and RT priority 80 |
 
-Fixed controls are declared in `steady_settings.py` and are copied into the
-Benchkit CSV and per-run manifest. They are intentionally not command-line
+Fixed controls are declared once in
+`tools/realsense_bench_common/settings.py`; `steady_settings.py` adds only
+steady-specific paths and factor names. The controls are copied into the
+Benchkit CSV and per-run manifest and are intentionally not command-line
 factors.
 
 ## Python module layout
@@ -27,13 +29,14 @@ The campaign runner is split by responsibility:
 - `run_steady_campaign.py` parses CLI arguments, selects cases, and constructs
   the Benchkit Cartesian-product campaign;
 - `steady_benchmark.py` adapts one steady-state run to Benchkit;
-- `steady_attempts.py` owns attempt selection, retry, and artifact promotion;
-- `camera_recovery.py` full-resets every selected D435 after a failed attempt;
+- `steady_attempts.py` supplies the steady-specific failure classifier and
+  artifact writer to the shared attempt engine;
 - `noise_workloads.py` owns CPU, memory, USB-storage, and GPU noise processes;
-- `system_controls.py` owns CPU-frequency, backend-binding, topology, and
-  kernel-log state;
-- `steady_results.py` assembles the per-run Benchkit result row;
-- `steady_settings.py` contains shared paths, fixed controls, and factor names.
+- `steady_results.py` assembles the steady-specific result columns;
+- `steady_settings.py` contains only steady paths and factor names;
+- `../realsense_bench_common/` owns scheduling/trace command construction,
+  retry orchestration, full-device recovery, CPU/RSUSB/kernel controls, cache
+  dropping, common result fields, and old/new artifact-layout resolution.
 
 ## Measurements
 
@@ -143,11 +146,13 @@ Full-reset recovery is enabled by default. If an attempt fails before
 
 The recovery controls are `--recover-on-failure {none,full-reset}`,
 `--max-attempts-per-run`, `--recovery-reset-timeout-ms`,
-`--recovery-wait-seconds`, and `--recovery-settle-seconds`. A successful
-selected attempt is promoted to the normal run directory so existing analysis
-continues to find `steady_summary.json`, `frame_events.csv`, and
-`lime_trace/`. `attempts.json`, `selected_attempt.txt`, and the Benchkit CSV
-record whether success was immediate or followed recovery.
+`--recovery-wait-seconds`, and `--recovery-settle-seconds`.
+
+Every attempt remains under `attempt-N/`, including the selected successful
+attempt. The run root contains `attempts.json`, `selected_attempt.txt`, a
+logical-run summary, and a convenience stdout copy. The shared resolver also
+understands historical campaigns in which the selected steady attempt was
+promoted to the run root.
 
 A failure after `steady_state_begin` is a measured steady-state outcome. The
 runner resets all cameras to protect the following campaign point but does not
@@ -414,50 +419,38 @@ campaign.
 
 ## Result Layout
 
-Every Benchkit record directory contains:
+Every Benchkit record directory uses the following indexed layout:
 
 ```text
 case.json
 run_manifest.json
-memory_cleanup_before_run.json
-topology_before.json
-topology_after.json
+attempts.json
+selected_attempt.txt
 steady_summary.json
-kernel_log.txt
-frame_events.csv
 probe_stdout.txt
-cpu_noise_configuration.json
-cpu_noise_ready.json
-cpu_noise_summary.json
-cpu_noise_process.json
-cpu_noise_stdout.txt
-cpu_noise_stderr.txt
-memory_noise_configuration.json
-memory_noise_ready.json
-memory_noise_summary.json
-memory_noise_process.json
-memory_noise_stdout.txt
-memory_noise_stderr.txt
-gpu_noise_configuration.json
-gpu_noise_ready.json
-gpu_noise_summary.json
-gpu_noise_process.json
-gpu_noise_stdout.txt
-gpu_noise_stderr.txt
-usb_storage_noise_configuration.json
-usb_storage_noise_ready.json
-usb_storage_noise_summary.json
-usb_storage_noise_process.json
-usb_storage_noise_stdout.txt
-usb_storage_noise_stderr.txt
-thread_lifecycle.jsonl
-lime_trace/
-thread_steady_intervals.csv
-thread_steady_activations.csv
-thread_steady_summary.csv
-thread_steady_summary.json
+cpu_frequency_lock.txt
+attempt-1/
+  attempt_manifest.json
+  memory_cleanup_before_run.json
+  topology_before.json
+  topology_after.json
+  steady_summary.json
+  kernel_log.txt
+  frame_events.csv
+  probe_stdout.txt
+  *_noise_configuration.json
+  *_noise_ready.json
+  *_noise_summary.json
+  *_noise_process.json
+  thread_lifecycle.jsonl
+  lime_trace/
+  thread_steady_intervals.csv
+  thread_steady_activations.csv
+  thread_steady_summary.csv
+  thread_steady_summary.json
+attempt-2/
+  ...
 ```
-
 `frame_events.csv` is the source for frame-loss and inter-arrival analysis.
 `thread_steady_activations.csv` groups scheduler fragments into jobs separated
 by blocking/sleep intervals; preemption does not incorrectly create a new job.

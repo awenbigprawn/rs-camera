@@ -16,7 +16,7 @@ sys.path.insert(0, str(BENCHKIT_DIR))
 sys.path.insert(0, str(TOOL_DIR))
 sys.path.insert(0, str(TOOLS_DIR))
 
-from camera_recovery import (  # noqa: E402
+from realsense_bench_common.recovery import (  # noqa: E402
     CameraRecoveryConfig,
     MultiCameraFullReset,
 )
@@ -175,7 +175,7 @@ class SteadyRunRetryTest(unittest.TestCase):
                 ["camera-a", "camera-b"],
             )
             self.assertTrue((record_dir / "attempt-1" / "recovery.json").is_file())
-            self.assertFalse((record_dir / "attempt-2").exists())
+            self.assertTrue((record_dir / "attempt-2").is_dir())
             self.assertEqual(summary["attempt_count"], 2)
             self.assertEqual(summary["failed_attempt_count"], 1)
             self.assertFalse(summary["initial_attempt_success"])

@@ -13,6 +13,8 @@ on Intel RealSense cameras.
 - tools/realsense_thread_trace/: pthread lifecycle tracer and visualization
   tools.
 - tools/realsense_steady_bench/: steady-state frame, thread, and USB scaling campaign.
+- tools/realsense_bench_common/: shared Benchkit settings, commands, retries,
+  recovery, system controls, cache handling, and result-artifact helpers.
 - deps/: pinned librealsense, LiME, and Benchkit dependencies.
 
 ## Build

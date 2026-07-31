@@ -16,21 +16,23 @@ from typing import Any, Dict, List
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_DIR = REPO_ROOT / "tools" / "realsense_startup_bench"
 TOOLS_DIR = REPO_ROOT / "tools"
-BENCHKIT_PATH = REPO_ROOT / "deps" / "benchkit"
+sys.path.insert(0, str(TOOLS_DIR))
+
+from realsense_bench_common.settings import (  # noqa: E402
+    BENCHKIT_PATH,
+    CPU_LOCK_SCRIPT as CPU_FREQ_LOCK_SCRIPT,
+    CPU_RESTORE_SCRIPT as CPU_FREQ_RESTORE_SCRIPT,
+    DEFAULT_LIME,
+    PAPER_BACKEND as CAMPAIGN_BACKEND,
+    PAPER_CPU_FREQUENCY_MHZ as CAMPAIGN_CPU_FREQUENCY_MHZ,
+    PAPER_DROP_CACHES_BEFORE_RUN as CAMPAIGN_DROP_CACHES_BEFORE_RUN,
+    PAPER_RT_PRIORITY as CAMPAIGN_RT_PRIORITY,
+    PAPER_USB_KERNEL_DRIVER as CAMPAIGN_USB_KERNEL_DRIVER,
+    POLICY_NAMES,
+)
+
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-startup"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
-DEFAULT_LIME = REPO_ROOT / "deps" / "lime-rtw" / "target" / "release" / "lime-rtw"
-CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
-CPU_FREQ_LOCK_SCRIPT = REPO_ROOT / "scripts" / "lock_cpu_freq.sh"
-CPU_FREQ_RESTORE_SCRIPT = REPO_ROOT / "scripts" / "restore_cpu_freq_default.sh"
-
-# Fixed controls for the paper campaign. These are recorded as Benchkit
-# constants and in each run manifest, but are not experimental factors.
-CAMPAIGN_BACKEND = "v4l2"
-CAMPAIGN_USB_KERNEL_DRIVER = "uvcvideo"
-CAMPAIGN_CPU_FREQUENCY_MHZ = 1500
-CAMPAIGN_DROP_CACHES_BEFORE_RUN = True
-CAMPAIGN_RT_PRIORITY = 80
 CAMPAIGN_CYCLE_DELAY_MS = 0
 CAMPAIGN_RSUSB_USB_DEVICE = ""
 CAMPAIGN_RSUSB_PREPARE_TIMEOUT_SECONDS = 10.0
@@ -48,8 +50,6 @@ if not BENCHKIT_PATH.exists():
     raise SystemExit("deps/benchkit is missing; initialize the repository submodules first.")
 sys.path.insert(0, str(BENCHKIT_PATH))
 sys.path.insert(0, str(TOOL_DIR))
-sys.path.insert(0, str(TOOLS_DIR))
-
 _BENCHKIT_IMPORT_ERROR = None
 try:
     from benchkit.benchmark import Benchmark
@@ -59,17 +59,31 @@ except ModuleNotFoundError as error:
     Benchmark = object
     CampaignCartesianProduct = None
 from parse_startup_trace import parse_startup_trace
-from realsense_benchmark_utils import (  # noqa: E402
+from realsense_bench_common.memory import (  # noqa: E402
     DropCachesBeforeRun,
     memory_cleanup_result_fields,
 )
-
-
-POLICY_NAMES = {
-    "other": "SCHED_OTHER",
-    "rr": "SCHED_RR",
-    "fifo": "SCHED_FIFO",
-}
+from realsense_bench_common.attempts import (  # noqa: E402
+    AttemptDecision,
+    run_attempt_loop,
+)
+from realsense_bench_common.commands import (  # noqa: E402
+    build_pthread_tracer,
+    scheduler_prefix,
+    traced_command,
+    validate_trace_environment,
+)
+from realsense_bench_common.recovery import (  # noqa: E402
+    CameraRecoveryConfig,
+    MultiCameraFullReset,
+)
+from realsense_bench_common.system_controls import (  # noqa: E402
+    SystemControlConfig,
+    SystemControls,
+)
+from realsense_bench_common.results import (  # noqa: E402
+    common_attempt_result_fields,
+)
 
 
 class RealSenseStartupBench(Benchmark):
@@ -124,11 +138,34 @@ class RealSenseStartupBench(Benchmark):
         self._cpu_frequency_mhz = CAMPAIGN_CPU_FREQUENCY_MHZ
         self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
-        self._cpu_frequency_original_state: Dict[str, Any] | None = None
-        self._cpu_frequency_locked = False
-        self._cpu_frequency_restore_needed = False
         self._probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
+        self._system_controls = SystemControls(
+            SystemControlConfig(
+                repo_root=REPO_ROOT,
+                tool_dir=TOOL_DIR,
+                use_sudo=use_sudo,
+                cpu_frequency_mhz=self._cpu_frequency_mhz,
+                cpu_lock_script=CPU_FREQ_LOCK_SCRIPT,
+                cpu_restore_script=CPU_FREQ_RESTORE_SCRIPT,
+                rsusb_backend=self._rsusb_backend,
+                rsusb_usb_devices=(
+                    (self._rsusb_usb_device,)
+                    if self._rsusb_usb_device
+                    else ()
+                ),
+                rsusb_helper=(
+                    REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
+                ),
+                rsusb_prepare_each_attempt=True,
+                rsusb_prepare_timeout_seconds=(
+                    self._rsusb_prepare_timeout_seconds
+                ),
+                rsusb_unbind_settle_seconds=(
+                    self._rsusb_unbind_settle_seconds
+                ),
+            )
+        )
 
     @property
     def bench_src_path(self) -> Path:
@@ -143,14 +180,7 @@ class RealSenseStartupBench(Benchmark):
         return ["policy"]
 
     def prebuild_bench(self, **_kwargs: Any) -> int:
-        if not self._lime.is_file():
-            raise RuntimeError(
-                f"LiME executable not found at {self._lime}. "
-                "Build the unmodified dependency with: "
-                "cargo build --release --manifest-path deps/lime-rtw/Cargo.toml"
-            )
-        if shutil.which("chrt") is None:
-            raise RuntimeError("chrt is required (normally provided by util-linux).")
+        validate_trace_environment(lime=self._lime, use_lime=True)
         if self._drop_caches_before_run:
             self._memory_cleanup_hook.validate()
         if (
@@ -162,14 +192,7 @@ class RealSenseStartupBench(Benchmark):
             )
         if self._recover_on_failure == "depth-prime" and shutil.which("v4l2-ctl") is None:
             raise RuntimeError("v4l2-ctl is required for --recover-on-failure depth-prime.")
-        if self._rsusb_usb_device:
-            helper = REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"
-            if not helper.is_file():
-                raise RuntimeError(f"RSUSB UVC helper not found: {helper}")
-        if self._cpu_frequency_mhz is not None:
-            for helper in (CPU_FREQ_LOCK_SCRIPT, CPU_FREQ_RESTORE_SCRIPT):
-                if not helper.is_file():
-                    raise RuntimeError(f"CPU-frequency helper not found: {helper}")
+        self._system_controls.validate_environment()
 
         subprocess.check_call([
             "cmake", "-S", str(REPO_ROOT), "-B", str(self._build_dir),
@@ -180,27 +203,22 @@ class RealSenseStartupBench(Benchmark):
             "cmake", "--build", str(self._build_dir),
             "--target", "d435_sensor_probe", "-j4",
         ])
-        compiler = os.environ.get("CC", "cc")
-        subprocess.check_call([
-            compiler, "-shared", "-fPIC", "-g", "-O2", "-fno-omit-frame-pointer",
-            "-Wall", "-Wextra", "-o", str(self._tracer),
-            str(REPO_ROOT / "tools" / "realsense_thread_trace" / "trace_pthreads.c"),
-            "-ldl", "-pthread",
-        ])
+        build_pthread_tracer(
+            output=self._tracer,
+            source=(
+                REPO_ROOT
+                / "tools"
+                / "realsense_thread_trace"
+                / "trace_pthreads.c"
+            ),
+        )
         return 0
 
     def build_bench(self, **_kwargs: Any) -> None:
         return None
 
     def _scheduled_probe(self, policy: str, cycle_delay_ms: int) -> List[str]:
-        if policy == "other":
-            scheduled = ["chrt", "--other", "0"]
-        elif policy == "rr":
-            scheduled = ["chrt", "--rr", str(self._priority)]
-        elif policy == "fifo":
-            scheduled = ["chrt", "--fifo", str(self._priority)]
-        else:
-            raise ValueError(f"Unsupported policy: {policy}")
+        scheduled = scheduler_prefix(policy, self._priority)
 
         probe = [
             str(self._probe),
@@ -215,292 +233,11 @@ class RealSenseStartupBench(Benchmark):
             probe += ["--serial", self._serial]
         return scheduled + probe
 
-    def _run_rsusb_uvc_helper(self, action: str) -> None:
-        if not self._rsusb_usb_device:
-            return
-
-        command = [
-            str(REPO_ROOT / "scripts" / "realsense_rsusb_uvc.sh"),
-            action,
-            self._rsusb_usb_device,
-        ]
-        if self._use_sudo:
-            command = ["sudo", "--non-interactive", *command]
-        deadline = time.monotonic() + self._rsusb_prepare_timeout_seconds
-        failures: List[str] = []
-        while True:
-            completed = subprocess.run(
-                command,
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            output = (completed.stdout + completed.stderr).strip()
-            if completed.returncode == 0:
-                if output:
-                    print(f"[RSUSB] {output}")
-                break
-            failures.append(output or f"exit status {completed.returncode}")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError(
-                    f"Failed to {action} UVC for {self._rsusb_usb_device}: "
-                    f"{failures[-1]}"
-                )
-            time.sleep(min(0.25, remaining))
-        if failures:
-            print(
-                f"[RSUSB] {action} succeeded after "
-                f"{len(failures)} transient failures"
-            )
-
-    def _prepare_rsusb_attempt(self) -> None:
-        self._run_rsusb_uvc_helper("unbind")
-        if self._rsusb_unbind_settle_seconds > 0:
-            time.sleep(self._rsusb_unbind_settle_seconds)
-
     def restore_v4l2_binding(self) -> None:
-        if not self._rsusb_usb_device:
-            return
-        print(
-            f"[RSUSB] restoring UVC binding for {self._rsusb_usb_device} "
-            "after the campaign"
-        )
-        self._run_rsusb_uvc_helper("bind")
-
-    @staticmethod
-    def _read_optional_text(path: Path) -> str:
-        try:
-            return path.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-
-    def _read_cpu_frequency_state(self) -> Dict[str, Any]:
-        policies: List[Dict[str, Any]] = []
-        for policy_dir in sorted(CPUFREQ_BASE.glob("policy*")):
-            if not policy_dir.is_dir():
-                continue
-            policies.append({
-                "name": policy_dir.name,
-                "path": str(policy_dir),
-                "driver": self._read_optional_text(policy_dir / "scaling_driver"),
-                "affected_cpus": self._read_optional_text(policy_dir / "affected_cpus"),
-                "governor": self._read_optional_text(policy_dir / "scaling_governor"),
-                "scaling_min_khz": self._read_optional_text(
-                    policy_dir / "scaling_min_freq"
-                ),
-                "scaling_max_khz": self._read_optional_text(
-                    policy_dir / "scaling_max_freq"
-                ),
-                "scaling_current_khz": self._read_optional_text(
-                    policy_dir / "scaling_cur_freq"
-                ),
-            })
-        return {
-            "policies": policies,
-            "boost": self._read_optional_text(CPUFREQ_BASE / "boost"),
-            "intel_pstate_no_turbo": self._read_optional_text(
-                Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
-            ),
-            "temperature_millic": self._read_optional_text(
-                Path("/sys/class/thermal/thermal_zone0/temp")
-            ),
-        }
-
-    def _privileged_command(self, command: List[str]) -> List[str]:
-        if not self._use_sudo:
-            return command
-        return ["sudo", "--non-interactive", *command]
-
-    def _verify_cpu_frequency(self, state: Dict[str, Any]) -> List[str]:
-        if self._cpu_frequency_mhz is None:
-            return []
-        target_khz = self._cpu_frequency_mhz * 1000
-        policies = state.get("policies", [])
-        if not policies:
-            return [f"no CPU-frequency policies found below {CPUFREQ_BASE}"]
-        errors: List[str] = []
-        for policy in policies:
-            name = policy.get("name", "unknown")
-            for field in (
-                "scaling_min_khz",
-                "scaling_max_khz",
-                "scaling_current_khz",
-            ):
-                if str(policy.get(field, "")) != str(target_khz):
-                    errors.append(
-                        f"{name} {field}={policy.get(field, '')}, "
-                        f"expected {target_khz}"
-                    )
-        return errors
-
-    def _lock_cpu_frequency_once(self, record_dir: Path) -> Dict[str, Any]:
-        if self._cpu_frequency_mhz is None:
-            return {"enabled": False, "policies": []}
-        if self._cpu_frequency_locked:
-            state = self._read_cpu_frequency_state()
-            errors = self._verify_cpu_frequency(state)
-            if errors:
-                raise RuntimeError(
-                    "CPU frequency changed during the campaign: " + " | ".join(errors)
-                )
-            state.update({
-                "enabled": True,
-                "requested_mhz": self._cpu_frequency_mhz,
-                "locked": True,
-            })
-            return state
-
-        self._cpu_frequency_original_state = self._read_cpu_frequency_state()
-        if not self._cpu_frequency_original_state["policies"]:
-            raise RuntimeError(f"No CPU-frequency policies found below {CPUFREQ_BASE}")
-
-        target_khz = self._cpu_frequency_mhz * 1000
-        command = self._privileged_command([
-            str(CPU_FREQ_LOCK_SCRIPT), str(target_khz),
-        ])
-        self._cpu_frequency_restore_needed = True
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        output = completed.stdout + completed.stderr
-        (record_dir / "cpu_frequency_lock.txt").write_text(output, encoding="utf-8")
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"CPU-frequency lock failed with status {completed.returncode}; "
-                f"see {record_dir / 'cpu_frequency_lock.txt'}"
-            )
-
-        deadline = time.monotonic() + 1.0
-        while True:
-            state = self._read_cpu_frequency_state()
-            errors = self._verify_cpu_frequency(state)
-            if not errors or time.monotonic() >= deadline:
-                break
-            time.sleep(0.05)
-        if errors:
-            raise RuntimeError(
-                "CPU-frequency lock verification failed: " + " | ".join(errors)
-            )
-
-        self._cpu_frequency_locked = True
-        state.update({
-            "enabled": True,
-            "requested_mhz": self._cpu_frequency_mhz,
-            "locked": True,
-        })
-        print(
-            f"[CPU-FREQ] locked {len(state['policies'])} policy/policies at "
-            f"{self._cpu_frequency_mhz} MHz before the first measured run"
-        )
-        return state
-
-    def _write_sysfs_value(self, path: Path, value: str) -> None:
-        completed = subprocess.run(
-            self._privileged_command(["tee", str(path)]),
-            input=value + "\n",
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip()
-            raise RuntimeError(f"Failed to restore {path}={value}: {detail}")
+        self._system_controls.restore_v4l2_binding()
 
     def restore_cpu_frequency(self) -> None:
-        if not self._cpu_frequency_restore_needed:
-            return
-        if self._cpu_frequency_original_state is None:
-            raise RuntimeError("Original CPU-frequency state was not captured")
-
-        print("[CPU-FREQ] restoring the pre-campaign CPU-frequency state")
-        completed = subprocess.run(
-            self._privileged_command([str(CPU_FREQ_RESTORE_SCRIPT)]),
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or f"status {completed.returncode}"
-            raise RuntimeError(f"Default CPU-frequency restore failed: {detail}")
-
-        # The helper restores a dynamic default. Reapply the exact range and
-        # governor captured immediately before this campaign's first lock.
-        for policy in self._cpu_frequency_original_state["policies"]:
-            policy_dir = Path(policy["path"])
-            scaling_max = str(policy.get("scaling_max_khz", ""))
-            scaling_min = str(policy.get("scaling_min_khz", ""))
-            governor = str(policy.get("governor", ""))
-            if scaling_max:
-                self._write_sysfs_value(policy_dir / "scaling_max_freq", scaling_max)
-            if scaling_min:
-                self._write_sysfs_value(policy_dir / "scaling_min_freq", scaling_min)
-            if governor:
-                self._write_sysfs_value(policy_dir / "scaling_governor", governor)
-
-        boost = str(self._cpu_frequency_original_state.get("boost", ""))
-        if boost and (CPUFREQ_BASE / "boost").is_file():
-            self._write_sysfs_value(CPUFREQ_BASE / "boost", boost)
-        no_turbo = str(
-            self._cpu_frequency_original_state.get("intel_pstate_no_turbo", "")
-        )
-        no_turbo_path = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
-        if no_turbo and no_turbo_path.is_file():
-            self._write_sysfs_value(no_turbo_path, no_turbo)
-
-        restored = self._read_cpu_frequency_state()
-        restored_by_name = {item["name"]: item for item in restored["policies"]}
-        errors: List[str] = []
-        for original in self._cpu_frequency_original_state["policies"]:
-            actual = restored_by_name.get(original["name"], {})
-            for field in ("scaling_min_khz", "scaling_max_khz", "governor"):
-                if actual.get(field) != original.get(field):
-                    errors.append(
-                        f"{original['name']} {field}={actual.get(field, '')}, "
-                        f"expected {original.get(field, '')}"
-                    )
-        if errors:
-            raise RuntimeError(
-                "Pre-campaign CPU-frequency state was not restored: "
-                + " | ".join(errors)
-            )
-        self._cpu_frequency_restore_needed = False
-        self._cpu_frequency_locked = False
-        print("[CPU-FREQ] pre-campaign state restored")
-
-    def _read_kernel_log(self) -> tuple[str | None, str]:
-        command = ["dmesg", "--raw"]
-        if self._use_sudo:
-            command = ["sudo", "--non-interactive", *command]
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-        if completed.returncode != 0:
-            message = completed.stderr.strip() or f"dmesg exited with status {completed.returncode}"
-            return None, message
-        return completed.stdout, ""
-
-    @staticmethod
-    def _kernel_log_delta(before: str, after: str) -> tuple[str, str]:
-        if after.startswith(before):
-            return after[len(before):], ""
-
-        before_lines = before.splitlines()
-        after_lines = after.splitlines()
-        if not before_lines:
-            return after, ""
-
-        anchor = before_lines[-1]
-        for index in range(len(after_lines) - 1, -1, -1):
-            if after_lines[index] == anchor:
-                delta = "\n".join(after_lines[index + 1:])
-                return (delta + "\n" if delta else ""), ""
-        return "", "dmesg ring buffer changed and the pre-run anchor was lost"
+        self._system_controls.restore_cpu_frequency()
 
     @staticmethod
     def _usb_device_from_physical_port(physical_port: str) -> Path | None:
@@ -656,77 +393,19 @@ class RealSenseStartupBench(Benchmark):
     def _recover_full_reset(
         self, device: Dict[str, Any], record_dir: Path
     ) -> Dict[str, Any]:
-        reset_timeout_seconds = self._recovery_reset_timeout_ms / 1000.0
-        command = [
-            str(self._probe),
-            "--hardware-reset",
-            "--reset-timeout-ms",
-            str(int(reset_timeout_seconds * 1000)),
-        ]
-        if self._serial:
-            command += ["--serial", self._serial]
-        if self._use_sudo:
-            command = [
-                "sudo", "--non-interactive", "--preserve-env=LD_LIBRARY_PATH", *command,
-            ]
-
-        result: Dict[str, Any] = {
-            "attempted": True,
-            "method": "full-reset",
-            "success": False,
-            "physical_port": str(device.get("physical_port", "")),
-            "hardware_reset": {"command": command, "success": False},
-        }
-        errors: List[str] = []
-        print("[RECOVERY] resetting D435 firmware and waiting for USB reconnect")
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=reset_timeout_seconds + 5,
-                check=False,
+        descriptor = dict(device)
+        if not descriptor.get("serial"):
+            descriptor["serial"] = self._serial
+        recovery = MultiCameraFullReset(
+            CameraRecoveryConfig(
+                repo_root=REPO_ROOT,
+                reset_probe=self._probe,
+                use_sudo=self._use_sudo,
+                reset_timeout_ms=self._recovery_reset_timeout_ms,
+                enumeration_timeout_seconds=self._recovery_wait_seconds,
             )
-            hardware_output = (completed.stdout + completed.stderr).strip()
-            hardware_success = (
-                completed.returncode == 0
-                and '"state":"complete"' in hardware_output
-            )
-            result["hardware_reset"] = {
-                "command": command,
-                "returncode": completed.returncode,
-                "output": hardware_output,
-                "success": hardware_success,
-            }
-            if not hardware_success:
-                errors.append("D435 firmware hardware reset did not complete")
-        except (OSError, subprocess.TimeoutExpired) as error:
-            result["hardware_reset"]["error"] = str(error)
-            errors.append(f"D435 firmware hardware reset failed: {error}")
-
-        # A D435 is one composite USB device. Resetting this parent device resets
-        # the depth, RGB, and infrared UVC interfaces together.
-        print(
-            "[RECOVERY] firmware reset "
-            f"success={result['hardware_reset'].get('success', False)}; "
-            "resetting composite host USB device"
         )
-        usb_result = self._recover_usb_device(device, record_dir)
-        result["usb_reset"] = usb_result
-        if not usb_result.get("success", False):
-            errors.append(str(usb_result.get("error", "host USB reset failed")))
-
-        result["success"] = bool(
-            result["hardware_reset"].get("success", False)
-            and usb_result.get("success", False)
-        )
-        if errors:
-            result["error"] = " | ".join(errors)
-        (record_dir / "recovery.json").write_text(
-            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        return result
+        return recovery.recover([descriptor], record_dir)
 
     def _run_attempt(
         self,
@@ -742,17 +421,15 @@ class RealSenseStartupBench(Benchmark):
         stdout_path = attempt_dir / "probe_stdout.txt"
         lime_dir = attempt_dir / "lime_trace"
 
-        target = [
-            "env",
-            f"LD_PRELOAD={self._tracer}",
-            f"RS_THREAD_TRACE_FILE={lifecycle_path}",
-            *self._scheduled_probe(policy, cycle_delay_ms),
-        ]
-        command = [
-            str(self._lime), "trace", "--best-effort", "-o", str(lime_dir), "--", *target,
-        ]
-        if self._use_sudo:
-            command = ["sudo", "--preserve-env=LD_LIBRARY_PATH", *command]
+        command = traced_command(
+            scheduled_command=self._scheduled_probe(policy, cycle_delay_ms),
+            tracer=self._tracer,
+            lifecycle_path=lifecycle_path,
+            lime=self._lime,
+            lime_dir=lime_dir,
+            use_lime=True,
+            use_sudo=self._use_sudo,
+        )
 
         attempt_manifest = dict(base_manifest)
         attempt_manifest.update({
@@ -779,7 +456,7 @@ class RealSenseStartupBench(Benchmark):
             self._cycles * (join_timeout_seconds + frame_timeout_seconds + 5)
             + delay_budget_seconds,
         )
-        kernel_before, kernel_error = self._read_kernel_log()
+        kernel_before, kernel_error = self._system_controls.kernel_log()
         try:
             output = self.run_bench_command(
                 run_command=command,
@@ -792,18 +469,11 @@ class RealSenseStartupBench(Benchmark):
                 ignore_ret_codes=(1, 2, 3),
             )
         finally:
-            kernel_after, after_error = self._read_kernel_log()
-            if kernel_before is not None and kernel_after is not None:
-                kernel_delta, delta_error = self._kernel_log_delta(kernel_before, kernel_after)
-                if not delta_error:
-                    (attempt_dir / "kernel_log.txt").write_text(kernel_delta, encoding="utf-8")
-                kernel_error = kernel_error or after_error or delta_error
-            else:
-                kernel_error = kernel_error or after_error
-            if kernel_error:
-                (attempt_dir / "kernel_log_capture_error.txt").write_text(
-                    kernel_error + "\n", encoding="utf-8"
-                )
+            self._system_controls.capture_kernel_delta(
+                attempt_dir,
+                kernel_before,
+                kernel_error,
+            )
 
         stdout_path.write_text(output, encoding="utf-8")
         summary = parse_startup_trace(
@@ -826,7 +496,9 @@ class RealSenseStartupBench(Benchmark):
         if any(record_dir.glob("attempt-*")):
             raise RuntimeError(f"Attempt directories already exist in {record_dir}")
 
-        cpu_frequency_before_run = self._lock_cpu_frequency_once(record_dir)
+        cpu_frequency_before_run = self._system_controls.prepare_campaign(
+            record_dir
+        )
         (record_dir / "cpu_frequency_before_run.json").write_text(
             json.dumps(cpu_frequency_before_run, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -865,15 +537,10 @@ class RealSenseStartupBench(Benchmark):
             encoding="utf-8",
         )
 
-        attempt_records: List[Dict[str, Any]] = []
-        recoveries: List[Dict[str, Any]] = []
-        final_output = ""
-        final_summary: Dict[str, Any] | None = None
-
-        for attempt in range(1, self._max_attempts_per_run + 1):
-            self._prepare_rsusb_attempt()
-            attempt_dir = record_dir / f"attempt-{attempt}"
-            output, summary = self._run_attempt(
+        def run_attempt(
+            attempt: int, attempt_dir: Path
+        ) -> tuple[str, Dict[str, Any]]:
+            return self._run_attempt(
                 policy=policy,
                 cycle_delay_ms=cycle_delay_ms,
                 attempt=attempt,
@@ -881,89 +548,72 @@ class RealSenseStartupBench(Benchmark):
                 base_manifest=base_manifest,
                 kwargs=kwargs,
             )
-            final_output = output
-            final_summary = summary
-            success = bool(summary.get("startup_result", {}).get("success", False))
-            attempt_record: Dict[str, Any] = {
-                "attempt": attempt,
-                "success": success,
-                "cycles_started": summary.get("cycles_started", 0),
-                "cycles_completed": summary.get("startup_result", {}).get("completed_cycles", 0),
-                "error_kind": summary.get("startup_error", {}).get("kind", ""),
-                "error_message": summary.get("startup_error", {}).get("message", ""),
-                "record_data_dir": str(attempt_dir),
+
+        def classify_attempt(summary: Dict[str, Any]) -> AttemptDecision:
+            startup_result = summary.get("startup_result", {})
+            startup_error = summary.get("startup_error", {})
+            success = bool(startup_result.get("success", False))
+            error_message = str(startup_error.get("message", ""))
+            return AttemptDecision(
+                success=success,
+                failure_phase="none" if success else "startup",
+                retry=not success,
+                error=error_message,
+                metadata={
+                    "cycles_started": summary.get("cycles_started", 0),
+                    "cycles_completed": startup_result.get(
+                        "completed_cycles", 0
+                    ),
+                    "error_kind": startup_error.get("kind", ""),
+                    "error_message": error_message,
+                },
+            )
+
+        def recover_attempt(
+            summary: Dict[str, Any],
+            attempt_dir: Path,
+            _decision: AttemptDecision,
+        ) -> Dict[str, Any]:
+            device = summary.get("device", {})
+            if self._recover_on_failure == "usb":
+                return self._recover_usb_device(device, attempt_dir)
+            if self._recover_on_failure == "depth-prime":
+                return self._recover_depth_prime(device, attempt_dir)
+            if self._recover_on_failure == "full-reset":
+                return self._recover_full_reset(device, attempt_dir)
+            return {
+                "attempted": False,
+                "method": self._recover_on_failure,
+                "success": False,
+                "error": "unsupported recovery method",
             }
 
-            if not success and self._recover_on_failure != "none":
-                error_message = attempt_record["error_message"] or "workload failed"
-                print(
-                    f"[RECOVERY] attempt {attempt}/{self._max_attempts_per_run} "
-                    f"failed: {error_message}"
-                )
-                if self._recover_on_failure == "usb":
-                    recovery = self._recover_usb_device(summary.get("device", {}), attempt_dir)
-                elif self._recover_on_failure == "depth-prime":
-                    recovery = self._recover_depth_prime(summary.get("device", {}), attempt_dir)
-                elif self._recover_on_failure == "full-reset":
-                    recovery = self._recover_full_reset(summary.get("device", {}), attempt_dir)
-                else:
-                    recovery = {
-                        "attempted": False,
-                        "method": self._recover_on_failure,
-                        "success": False,
-                        "error": "unsupported recovery method",
-                    }
-                recoveries.append(recovery)
-                attempt_record["recovery"] = recovery
-                if self._recovery_settle_seconds > 0:
-                    next_action = (
-                        f"attempt {attempt + 1}/{self._max_attempts_per_run}"
-                        if attempt < self._max_attempts_per_run
-                        else "the next Benchkit point"
-                    )
-                    print(
-                        f"[RETRY] recovery success={recovery.get('success', False)}; "
-                        f"waiting {self._recovery_settle_seconds:g}s before {next_action}"
-                    )
-                    time.sleep(self._recovery_settle_seconds)
-
-            attempt_records.append(attempt_record)
-            if success:
-                break
-
-        if final_summary is None:
-            raise RuntimeError("No workload attempt was executed")
-
-        failed_attempts = sum(1 for item in attempt_records if not item["success"])
-        recovery_errors = [
-            str(item.get("error", "")) for item in recoveries if item.get("error")
-        ]
-        aggregate_recovery: Dict[str, Any] = {
-            "attempted": bool(recoveries),
-            "method": self._recover_on_failure,
-            "count": len(recoveries),
-        }
-        if recoveries:
-            aggregate_recovery["success"] = all(
-                bool(item.get("success", False)) for item in recoveries
-            )
-        if recovery_errors:
-            aggregate_recovery["error"] = " | ".join(recovery_errors)
-
-        final_summary["attempt_count"] = len(attempt_records)
-        final_summary["failed_attempt_count"] = failed_attempts
-        final_summary["initial_attempt_success"] = bool(attempt_records[0]["success"])
-        final_summary["eventual_success"] = bool(
-            final_summary.get("startup_result", {}).get("success", False)
+        attempt_result = run_attempt_loop(
+            record_dir=record_dir,
+            max_attempts=self._max_attempts_per_run,
+            recovery_method=self._recover_on_failure,
+            recovery_settle_seconds=self._recovery_settle_seconds,
+            run_attempt=run_attempt,
+            classify_attempt=classify_attempt,
+            recover_attempt=(
+                recover_attempt
+                if self._recover_on_failure != "none"
+                else None
+            ),
+            before_attempt=self._system_controls.prepare_attempt,
         )
-        final_summary["attempts"] = attempt_records
-        final_summary["recovery"] = aggregate_recovery
+        attempt_records = attempt_result.attempts
+        final_output = attempt_result.output
+        final_summary = attempt_result.summary
+
         cpu_frequency_after_run = (
-            self._read_cpu_frequency_state()
+            self._system_controls.cpu_frequency_state()
             if self._cpu_frequency_mhz is not None
             else {"policies": []}
         )
-        frequency_errors = self._verify_cpu_frequency(cpu_frequency_after_run)
+        frequency_errors = self._system_controls.verify_cpu_frequency(
+            cpu_frequency_after_run
+        )
         cpu_frequency_after_run.update({
             "enabled": self._cpu_frequency_mhz is not None,
             "requested_mhz": self._cpu_frequency_mhz,
@@ -986,7 +636,7 @@ class RealSenseStartupBench(Benchmark):
         )
         (record_dir / "probe_stdout.txt").write_text(final_output, encoding="utf-8")
         (record_dir / "selected_attempt.txt").write_text(
-            str(len(attempt_records)) + "\n", encoding="utf-8"
+            str(attempt_result.selected_attempt) + "\n", encoding="utf-8"
         )
         return final_output
 
@@ -1014,9 +664,9 @@ class RealSenseStartupBench(Benchmark):
         )
         requested = POLICY_NAMES[run_variables["policy"]]
         effective = scheduler.get("policy", "")
-        recovery = summary.get("recovery", {})
         return {
             **memory_cleanup,
+            **common_attempt_result_fields(summary),
             "librealsense_backend": "rsusb" if self._rsusb_backend else "v4l2",
             "cpu_frequency_requested_mhz": frequency_before.get("requested_mhz", ""),
             "cpu_frequency_locked": frequency_before.get("locked", False),
@@ -1046,10 +696,6 @@ class RealSenseStartupBench(Benchmark):
             "priority_effective": scheduler.get("priority", ""),
             "policy_matches": effective == requested,
             "workload_success": bool(startup_result.get("success", False)),
-            "attempt_count": summary.get("attempt_count", 1),
-            "failed_attempt_count": summary.get("failed_attempt_count", 0),
-            "initial_attempt_success": summary.get("initial_attempt_success", True),
-            "eventual_success": summary.get("eventual_success", False),
             "process_error": summary.get("process_error", False),
             "startup_error_kind": summary.get("startup_error", {}).get("kind", ""),
             "startup_error_message": summary.get("startup_error", {}).get("message", ""),
@@ -1077,11 +723,6 @@ class RealSenseStartupBench(Benchmark):
             "uvc_resubmit_errors_other": summary.get("uvc_resubmit_errors_other", 0),
             "uvc_resubmit_interfaces": summary.get("uvc_resubmit_interfaces", ""),
             "uvc_resubmit_error_codes": summary.get("uvc_resubmit_error_codes", ""),
-            "recovery_attempted": recovery.get("attempted", False),
-            "recovery_count": recovery.get("count", 0),
-            "recovery_method": recovery.get("method", "none"),
-            "recovery_success": recovery.get("success", ""),
-            "recovery_error": recovery.get("error", ""),
             "record_data_dir": str(record_dir),
         }
 

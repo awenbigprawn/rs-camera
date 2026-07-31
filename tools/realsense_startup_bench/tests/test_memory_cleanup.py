@@ -12,7 +12,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-from realsense_benchmark_utils import (  # noqa: E402
+from realsense_bench_common.memory import (  # noqa: E402
     DropCachesBeforeRun,
     MEMORY_CLEANUP_FILENAME,
     memory_cleanup_result_fields,

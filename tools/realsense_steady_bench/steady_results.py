@@ -8,7 +8,9 @@ import re
 from typing import Any, Dict, Mapping
 
 from noise_workloads import NoiseSuite
-from realsense_benchmark_utils import memory_cleanup_result_fields
+from realsense_bench_common.memory import memory_cleanup_result_fields
+from realsense_bench_common.artifacts import resolve_selected_attempt
+from realsense_bench_common.results import common_attempt_result_fields
 
 
 def flatten(prefix: str, value: Any, output: Dict[str, Any]) -> None:
@@ -144,26 +146,17 @@ def parse_steady_results(
 ) -> Dict[str, Any]:
     path = record_dir / "steady_summary.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    selected = resolve_selected_attempt(record_dir)
+    selected_dir = selected.data_dir
     aggregate = data.get("aggregate", {})
     result: Dict[str, Any] = {
         **memory_cleanup_result_fields(
-            record_dir,
+            selected_dir,
             configured=drop_caches_configured,
         ),
+        **common_attempt_result_fields(data),
         "success": data.get("success", False),
         "error": data.get("error", "summary file missing"),
-        "attempt_count": data.get("attempt_count", 1),
-        "failed_attempt_count": data.get("failed_attempt_count", 0),
-        "initial_attempt_success": data.get(
-            "initial_attempt_success", data.get("success", False)
-        ),
-        "eventual_success": data.get("eventual_success", data.get("success", False)),
-        "selected_attempt": data.get("selected_attempt", 1),
-        "recovery_attempted": data.get("recovery", {}).get("attempted", False),
-        "recovery_count": data.get("recovery", {}).get("count", 0),
-        "recovery_method": data.get("recovery", {}).get("method", "none"),
-        "recovery_success": data.get("recovery", {}).get("success", ""),
-        "recovery_error": data.get("recovery", {}).get("error", ""),
         "backend": backend_name,
         "policy_requested": policy_names[str(run_variables["policy"])],
         "cpu_noise_mode": run_variables["cpu_noise"],
@@ -183,12 +176,14 @@ def parse_steady_results(
             "duration_ms", 0
         ),
         "record_data_dir": str(record_dir),
+        "selected_attempt_data_dir": str(selected_dir),
+        "artifact_layout": selected.layout,
     }
 
     _add_noise_results(
         result,
         run_variables=run_variables,
-        record_dir=record_dir,
+        record_dir=selected_dir,
         noise_suite=noise_suite,
     )
     flatten("workload", case.get("workload", {}), result)
@@ -200,6 +195,6 @@ def parse_steady_results(
     )
     flatten("wait_ms", aggregate.get("wait_ms", {}), result)
     _add_camera_results(result, data)
-    _add_trace_results(result, record_dir)
-    _add_kernel_results(result, record_dir)
+    _add_trace_results(result, selected_dir)
+    _add_kernel_results(result, selected_dir)
     return result

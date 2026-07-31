@@ -10,6 +10,10 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, List
 
+_BOOTSTRAP_TOOL_DIR = Path(__file__).resolve().parent
+_BOOTSTRAP_TOOLS_DIR = _BOOTSTRAP_TOOL_DIR.parent
+sys.path.insert(0, str(_BOOTSTRAP_TOOLS_DIR))
+
 from steady_settings import (
     BENCHKIT_PATH,
     CPU_NOISE_MODES,

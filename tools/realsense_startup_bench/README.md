@@ -22,9 +22,20 @@ the main thread and normally-created child threads inherit the selected policy.
 | Operational inputs | camera serial, cycles, frames, repetitions, timeouts, and output path |
 | Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, RT priority 80, and 0 ms cycle delay |
 
-Fixed controls are declared near the top of `run_startup_campaign.py` and are
-copied into the Benchkit CSV and per-run manifest. They are intentionally not
-command-line factors.
+Backend, USB driver, CPU frequency, cache handling, RT priority, and policy
+names are declared once in `tools/realsense_bench_common/settings.py`.
+`run_startup_campaign.py` adds the startup-specific zero cycle delay. These
+controls are copied into the Benchkit CSV and per-run manifest and are
+intentionally not command-line factors.
+
+## Shared campaign infrastructure
+
+Startup and steady-state campaigns use the same common modules for scheduler
+and LiME command construction, pthread tracer compilation, attempt/retry
+orchestration, full composite-device recovery, CPU-frequency and RSUSB
+lifecycle, kernel-log capture, cache dropping, and retry/recovery result
+columns. Only startup-specific probe arguments, trace parsing, calibration,
+and the optional legacy USB/depth-prime recovery strategies remain here.
 
 ## Why two traces?
 
