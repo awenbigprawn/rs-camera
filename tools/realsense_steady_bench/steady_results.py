@@ -72,9 +72,11 @@ def _add_camera_results(
         prefix = f"camera_{index}"
         for key in (
             "serial",
+            "physical_port",
             "usb_type",
             "start_call_ms",
             "stop_call_ms",
+            "warmup_deliveries",
             "deliveries",
             "frames",
             "drops",
@@ -150,6 +152,18 @@ def parse_steady_results(
         ),
         "success": data.get("success", False),
         "error": data.get("error", "summary file missing"),
+        "attempt_count": data.get("attempt_count", 1),
+        "failed_attempt_count": data.get("failed_attempt_count", 0),
+        "initial_attempt_success": data.get(
+            "initial_attempt_success", data.get("success", False)
+        ),
+        "eventual_success": data.get("eventual_success", data.get("success", False)),
+        "selected_attempt": data.get("selected_attempt", 1),
+        "recovery_attempted": data.get("recovery", {}).get("attempted", False),
+        "recovery_count": data.get("recovery", {}).get("count", 0),
+        "recovery_method": data.get("recovery", {}).get("method", "none"),
+        "recovery_success": data.get("recovery", {}).get("success", ""),
+        "recovery_error": data.get("recovery", {}).get("error", ""),
         "backend": backend_name,
         "policy_requested": policy_names[str(run_variables["policy"])],
         "cpu_noise_mode": run_variables["cpu_noise"],

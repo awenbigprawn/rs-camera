@@ -27,6 +27,8 @@ The campaign runner is split by responsibility:
 - `run_steady_campaign.py` parses CLI arguments, selects cases, and constructs
   the Benchkit Cartesian-product campaign;
 - `steady_benchmark.py` adapts one steady-state run to Benchkit;
+- `steady_attempts.py` owns attempt selection, retry, and artifact promotion;
+- `camera_recovery.py` full-resets every selected D435 after a failed attempt;
 - `noise_workloads.py` owns CPU, memory, USB-storage, and GPU noise processes;
 - `system_controls.py` owns CPU-frequency, backend-binding, topology, and
   kernel-log state;
@@ -113,12 +115,43 @@ campaign fixes `CAMPAIGN_CPU_FREQUENCY_MHZ = 1500` and
 `CAMPAIGN_RT_PRIORITY = 80` near the top of the runner; neither is a Cartesian
 factor or CLI override.
 
-Before every logical Benchkit run, the runner also executes `sync` and writes
-`3` to `/proc/sys/vm/drop_caches`. This establishes a cold Linux page cache and
-reclaims dentries and inodes before noise warm-up or camera startup; anonymous
-memory and swap are not cleared. The operation runs once per repetition and is
-recorded in `memory_cleanup_before_run.json` and the campaign CSV. Run `sudo -v`
-before the campaign. Cache cleanup is a fixed paper-campaign control.
+Before every attempt, including a retry of the same logical Benchkit run, the
+runner executes `sync` and writes `3` to `/proc/sys/vm/drop_caches`. This
+establishes a cold Linux page cache and reclaims dentries and inodes before noise
+warm-up or camera startup; anonymous memory and swap are not cleared. The
+operation is recorded in `memory_cleanup_before_run.json` and the campaign CSV.
+Run `sudo -v` before the campaign. Cache cleanup is a fixed paper-campaign
+control.
+
+## Multi-camera warm-up, recovery, and retry
+
+The C++ probe uses a global warm-up barrier. It emits `steady_state_begin` and
+starts the measured interval only after every selected camera has delivered its
+configured number of warm-up frames. For two cameras, one healthy camera cannot
+start the measurement while the other reports `Frame didn't arrive`.
+
+Full-reset recovery is enabled by default. If an attempt fails before
+`steady_state_begin`, the runner:
+
+1. preserves that failed attempt and its LiME, pthread, topology, kernel-log,
+   noise, and probe artifacts under `attempt-N/`;
+2. performs a librealsense firmware hardware reset for every selected camera;
+3. resets the parent composite USB device for every camera, thereby resetting
+   all Depth, RGB, and IR UVC interfaces together;
+4. waits for every serial number to re-enumerate; and
+5. repeats only the same logical Benchkit run, up to three attempts by default.
+
+The recovery controls are `--recover-on-failure {none,full-reset}`,
+`--max-attempts-per-run`, `--recovery-reset-timeout-ms`,
+`--recovery-wait-seconds`, and `--recovery-settle-seconds`. A successful
+selected attempt is promoted to the normal run directory so existing analysis
+continues to find `steady_summary.json`, `frame_events.csv`, and
+`lime_trace/`. `attempts.json`, `selected_attempt.txt`, and the Benchkit CSV
+record whether success was immediate or followed recovery.
+
+A failure after `steady_state_begin` is a measured steady-state outcome. The
+runner resets all cameras to protect the following campaign point but does not
+retry and conceal that failure.
 
 Use `--no-lime` only for functional debugging. It keeps the pthread lifecycle
 trace but cannot produce scheduler execution-time distributions.

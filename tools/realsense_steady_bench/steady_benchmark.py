@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List
 
 from benchkit.benchmark import Benchmark
 
+from camera_recovery import CameraRecoveryConfig, MultiCameraFullReset
 from noise_workloads import (
     CpuBusyLoopNoise,
     CpuNoiseConfig,
@@ -24,6 +25,7 @@ from noise_workloads import (
 )
 from parse_steady_trace import parse_steady_trace
 from realsense_benchmark_utils import DropCachesBeforeRun
+from steady_attempts import camera_descriptors, run_steady_attempts
 from steady_results import parse_steady_results
 from steady_settings import (
     CAMPAIGN_BACKEND,
@@ -74,6 +76,11 @@ class RealSenseSteadyBench(Benchmark):
         usb_storage_warmup_seconds: float,
         usb_storage_block_size_kib: int,
         usb_storage_ready_timeout_seconds: float,
+        recover_on_failure: str,
+        recovery_reset_timeout_ms: int,
+        recovery_wait_seconds: float,
+        recovery_settle_seconds: float,
+        max_attempts_per_run: int,
         build_jobs: int,
     ) -> None:
         memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
@@ -81,11 +88,7 @@ class RealSenseSteadyBench(Benchmark):
             command_wrappers=(),
             command_attachments=(),
             shared_libs=(),
-            pre_run_hooks=(
-                (memory_cleanup_hook,)
-                if CAMPAIGN_DROP_CACHES_BEFORE_RUN
-                else ()
-            ),
+            pre_run_hooks=(),
             post_run_hooks=(),
         )
         self._cases = {case["case_id"]: case for case in cases}
@@ -98,7 +101,20 @@ class RealSenseSteadyBench(Benchmark):
         self._memory_cleanup_hook = memory_cleanup_hook
         self._build_jobs = build_jobs
         self._probe = self._build_dir / "realsense_steady_probe"
+        self._reset_probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
+        self._recover_on_failure = recover_on_failure
+        self._recovery_settle_seconds = recovery_settle_seconds
+        self._max_attempts_per_run = max_attempts_per_run
+        self._recovery = MultiCameraFullReset(
+            CameraRecoveryConfig(
+                repo_root=REPO_ROOT,
+                reset_probe=self._reset_probe,
+                use_sudo=use_sudo,
+                reset_timeout_ms=recovery_reset_timeout_ms,
+                enumeration_timeout_seconds=recovery_wait_seconds,
+            )
+        )
         self._system_controls = SystemControls(
             SystemControlConfig(
                 repo_root=REPO_ROOT,
@@ -194,6 +210,8 @@ class RealSenseSteadyBench(Benchmark):
         if self._drop_caches_before_run:
             self._memory_cleanup_hook.validate()
         self._noise_suite.validate_environment()
+        if self._recover_on_failure == "full-reset":
+            self._recovery.validate_environment()
         self._system_controls.validate_environment()
 
         subprocess.check_call(
@@ -208,7 +226,11 @@ class RealSenseSteadyBench(Benchmark):
                 f"-DRS_CAMERA_BUILD_GPU_NOISE={'ON' if self._noise_suite.gpu_enabled else 'OFF'}",
             ]
         )
-        build_targets = ["realsense_steady_probe", *self._noise_suite.build_targets()]
+        build_targets = [
+            "realsense_steady_probe",
+            "d435_sensor_probe",
+            *self._noise_suite.build_targets(),
+        ]
         subprocess.check_call(
             [
                 "cmake",
@@ -296,39 +318,48 @@ class RealSenseSteadyBench(Benchmark):
         ]
         return command
 
-    def single_run(
+    def _drop_caches_for_attempt(
         self,
+        attempt_dir: Path,
         case_id: str,
         policy: str,
-        cpu_noise: str,
-        memory_noise: str,
-        gpu_noise: str,
-        usb_storage_noise: str,
-        record_data_dir: Path,
-        **kwargs: Any,
-    ) -> str:
-        case = self._cases[case_id]
-        record_dir = Path(record_data_dir).resolve()
-        record_dir.mkdir(parents=True, exist_ok=True)
-        self._system_controls.prepare_campaign(record_dir)
-
-        summary_path = record_dir / "steady_summary.json"
-        events_path = record_dir / "frame_events.csv"
-        lifecycle_path = record_dir / "thread_lifecycle.jsonl"
-        lime_dir = record_dir / "lime_trace"
-        stdout_path = record_dir / "probe_stdout.txt"
-        noise_modes = {
-            "cpu_noise": cpu_noise,
-            "memory_noise": memory_noise,
-            "usb_storage_noise": usb_storage_noise,
-            "gpu_noise": gpu_noise,
-        }
-        before = record_dir / "topology_before.json"
-        after = record_dir / "topology_after.json"
-        (record_dir / "case.json").write_text(
-            json.dumps(case, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        noise_modes: Dict[str, str],
+    ) -> None:
+        if not self._drop_caches_before_run:
+            return
+        self._memory_cleanup_hook(
+            build_variables={},
+            run_variables={
+                "case_id": case_id,
+                "policy": policy,
+                **noise_modes,
+            },
+            other_variables={},
+            record_data_dir=attempt_dir,
         )
+
+    def _run_attempt(
+        self,
+        *,
+        case_id: str,
+        case: Dict[str, Any],
+        policy: str,
+        attempt: int,
+        attempt_dir: Path,
+        base_manifest: Dict[str, Any],
+        noise_modes: Dict[str, str],
+        kwargs: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any]]:
+        attempt_dir.mkdir(parents=True, exist_ok=False)
+        self._drop_caches_for_attempt(attempt_dir, case_id, policy, noise_modes)
+
+        summary_path = attempt_dir / "steady_summary.json"
+        events_path = attempt_dir / "frame_events.csv"
+        lifecycle_path = attempt_dir / "thread_lifecycle.jsonl"
+        lime_dir = attempt_dir / "lime_trace"
+        stdout_path = attempt_dir / "probe_stdout.txt"
+        before = attempt_dir / "topology_before.json"
+        after = attempt_dir / "topology_after.json"
         self._system_controls.snapshot_topology(before)
 
         target = [
@@ -351,24 +382,14 @@ class RealSenseSteadyBench(Benchmark):
         if self._use_sudo:
             command = ["sudo", "--preserve-env=LD_LIBRARY_PATH", *command]
 
-        manifest = {
-            "schema_version": 1,
-            "case_id": case_id,
-            "policy_requested": POLICY_NAMES[policy],
-            "priority_requested": 0 if policy == "other" else self._priority,
-            "backend": self._system_controls.backend_name,
-            "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
-            "lime_enabled": self._use_lime,
-            "cpu_frequency_mhz": self._system_controls.config.cpu_frequency_mhz,
-            "drop_caches_before_run": getattr(
-                self, "_drop_caches_before_run", False
-            ),
-            **self._noise_suite.manifest(noise_modes),
+        attempt_manifest = {
+            **base_manifest,
+            "attempt": attempt,
             "command": command,
-            "clock": "CLOCK_BOOTTIME",
+            "record_data_dir": str(attempt_dir),
         }
-        (record_dir / "run_manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        (attempt_dir / "attempt_manifest.json").write_text(
+            json.dumps(attempt_manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
@@ -385,8 +406,9 @@ class RealSenseSteadyBench(Benchmark):
         measurement_timeout = int(probe.get("measurement_timeout_ms", 0)) / 1000
         timeout = max(int(automatic_seconds), int(measurement_timeout + 60))
         kernel_before, kernel_error = self._system_controls.kernel_log()
+        output = ""
         try:
-            self._noise_suite.start_all(noise_modes, record_dir)
+            self._noise_suite.start_all(noise_modes, attempt_dir)
             output = self.run_bench_command(
                 run_command=command,
                 wrapped_run_command=wrapped_command,
@@ -399,24 +421,121 @@ class RealSenseSteadyBench(Benchmark):
             )
             stdout_path.write_text(output, encoding="utf-8")
         finally:
-            self._noise_suite.stop_all(record_dir)
+            self._noise_suite.stop_all(attempt_dir)
             self._system_controls.capture_kernel_delta(
-                record_dir, kernel_before, kernel_error
+                attempt_dir, kernel_before, kernel_error
             )
             self._system_controls.snapshot_topology(after)
 
-        if self._use_lime and summary_path.is_file():
+        if summary_path.is_file():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        else:
+            summary = {
+                "schema_version": 1,
+                "success": False,
+                "error": "steady probe summary file missing",
+                "measurement": {
+                    "start_boottime_ns": 0,
+                    "end_boottime_ns": 0,
+                    "duration_ms": 0.0,
+                },
+                "cameras": camera_descriptors(case, {}),
+                "aggregate": {},
+            }
+            summary_path.write_text(
+                json.dumps(summary, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+        if self._use_lime:
             try:
-                parse_steady_trace(lifecycle_path, lime_dir, record_dir)
+                parse_steady_trace(lifecycle_path, lime_dir, attempt_dir)
             except Exception as error:
-                (record_dir / "trace_parse_error.txt").write_text(
+                (attempt_dir / "trace_parse_error.txt").write_text(
                     f"{type(error).__name__}: {error}\n",
                     encoding="utf-8",
                 )
-                data = json.loads(summary_path.read_text(encoding="utf-8"))
-                if data.get("success"):
+                if summary.get("success"):
                     raise
-        return output
+        return output, summary
+
+    def single_run(
+        self,
+        case_id: str,
+        policy: str,
+        cpu_noise: str,
+        memory_noise: str,
+        gpu_noise: str,
+        usb_storage_noise: str,
+        record_data_dir: Path,
+        **kwargs: Any,
+    ) -> str:
+        case = self._cases[case_id]
+        record_dir = Path(record_data_dir).resolve()
+        record_dir.mkdir(parents=True, exist_ok=True)
+        if any(record_dir.glob("attempt-*")):
+            raise RuntimeError(f"Attempt directories already exist in {record_dir}")
+        self._system_controls.prepare_campaign(record_dir)
+
+        noise_modes = {
+            "cpu_noise": cpu_noise,
+            "memory_noise": memory_noise,
+            "usb_storage_noise": usb_storage_noise,
+            "gpu_noise": gpu_noise,
+        }
+        (record_dir / "case.json").write_text(
+            json.dumps(case, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        base_manifest: Dict[str, Any] = {
+            "schema_version": 2,
+            "case_id": case_id,
+            "policy_requested": POLICY_NAMES[policy],
+            "priority_requested": 0 if policy == "other" else self._priority,
+            "backend": self._system_controls.backend_name,
+            "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
+            "lime_enabled": self._use_lime,
+            "cpu_frequency_mhz": self._system_controls.config.cpu_frequency_mhz,
+            "drop_caches_before_attempt": self._drop_caches_before_run,
+            "recover_on_failure": self._recover_on_failure,
+            "recovery_reset_timeout_ms": self._recovery.config.reset_timeout_ms,
+            "recovery_wait_seconds": (
+                self._recovery.config.enumeration_timeout_seconds
+            ),
+            "recovery_settle_seconds": self._recovery_settle_seconds,
+            "max_attempts_per_run": self._max_attempts_per_run,
+            **self._noise_suite.manifest(noise_modes),
+            "clock": "CLOCK_BOOTTIME",
+        }
+        (record_dir / "run_manifest.json").write_text(
+            json.dumps(base_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        def run_attempt(
+            attempt: int, attempt_dir: Path
+        ) -> tuple[str, Dict[str, Any]]:
+            return self._run_attempt(
+                case_id=case_id,
+                case=case,
+                policy=policy,
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                base_manifest=base_manifest,
+                noise_modes=noise_modes,
+                kwargs=kwargs,
+            )
+
+        return run_steady_attempts(
+            case=case,
+            record_dir=record_dir,
+            base_manifest=base_manifest,
+            recover_on_failure=self._recover_on_failure,
+            recovery_settle_seconds=self._recovery_settle_seconds,
+            max_attempts_per_run=self._max_attempts_per_run,
+            recovery=self._recovery,
+            run_attempt=run_attempt,
+        )
 
     def parse_output_to_results(
         self,

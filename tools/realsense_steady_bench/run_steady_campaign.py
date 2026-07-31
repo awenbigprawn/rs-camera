@@ -85,6 +85,39 @@ def main() -> None:
     parser.add_argument("--no-lime", action="store_true")
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
+        "--recover-on-failure",
+        choices=("none", "full-reset"),
+        default="full-reset",
+        help=(
+            "Recover failed camera startup before continuing (default: full-reset). "
+            "A full reset covers every selected D435 composite USB device."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-reset-timeout-ms",
+        type=int,
+        default=5000,
+        help="Per-camera D435 firmware reset timeout (default: 5000 ms)",
+    )
+    parser.add_argument(
+        "--recovery-wait-seconds",
+        type=float,
+        default=1.2,
+        help="Per-camera USB re-enumeration timeout (default: 1.2 s)",
+    )
+    parser.add_argument(
+        "--recovery-settle-seconds",
+        type=float,
+        default=0.0,
+        help="Delay after resetting all cameras and before retry (default: 0 s)",
+    )
+    parser.add_argument(
+        "--max-attempts-per-run",
+        type=int,
+        default=3,
+        help="Maximum startup attempts for one logical Benchkit run (default: 3)",
+    )
+    parser.add_argument(
         "--cpu-noise-modes",
         nargs="+",
         choices=CPU_NOISE_MODES,
@@ -172,6 +205,16 @@ def main() -> None:
     args = parser.parse_args()
     if args.build_jobs < 1:
         raise SystemExit("--build-jobs must be positive")
+    if args.recovery_reset_timeout_ms < 1:
+        raise SystemExit("--recovery-reset-timeout-ms must be positive")
+    if args.recovery_wait_seconds <= 0:
+        raise SystemExit("--recovery-wait-seconds must be positive")
+    if args.recovery_settle_seconds < 0:
+        raise SystemExit("--recovery-settle-seconds must be non-negative")
+    if args.max_attempts_per_run < 1:
+        raise SystemExit("--max-attempts-per-run must be positive")
+    if args.max_attempts_per_run > 1 and args.recover_on_failure == "none":
+        raise SystemExit("multiple attempts require --recover-on-failure")
     if args.cpu_noise_workers < 1:
         raise SystemExit("--cpu-noise-workers must be positive")
     if args.cpu_noise_warmup_seconds <= 0:
@@ -233,6 +276,24 @@ def main() -> None:
             case.setdefault("physical", {})["camera_count"] = len(args.serials)
     if not cases:
         raise SystemExit("No cases selected")
+    if args.recover_on_failure == "full-reset":
+        for case in cases:
+            probe = case.get("probe", {})
+            serials = probe.get("serials", probe.get("serial", []))
+            if isinstance(serials, str):
+                serials = [serials] if serials else []
+            camera_count = int(
+                probe.get(
+                    "camera_count",
+                    case.get("physical", {}).get("camera_count", 1),
+                )
+            )
+            if len(serials) != camera_count:
+                raise SystemExit(
+                    "full-reset recovery requires one explicit --serial per "
+                    f"selected camera; case {case['case_id']!r} selects "
+                    f"{camera_count} camera(s) but provides {len(serials)} serial(s)"
+                )
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
     benchmark = RealSenseSteadyBench(
@@ -263,6 +324,11 @@ def main() -> None:
         usb_storage_warmup_seconds=args.usb_storage_warmup_seconds,
         usb_storage_block_size_kib=args.usb_storage_block_size_kib,
         usb_storage_ready_timeout_seconds=args.usb_storage_ready_timeout_seconds,
+        recover_on_failure=args.recover_on_failure,
+        recovery_reset_timeout_ms=args.recovery_reset_timeout_ms,
+        recovery_wait_seconds=args.recovery_wait_seconds,
+        recovery_settle_seconds=args.recovery_settle_seconds,
+        max_attempts_per_run=args.max_attempts_per_run,
         build_jobs=args.build_jobs,
     )
     campaign = CampaignCartesianProduct(
