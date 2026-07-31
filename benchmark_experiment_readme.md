@@ -13,6 +13,7 @@ Raspberry Pi 5. The study targets:
 - the effects of Linux scheduling policies and `PREEMPT_RT`;
 - scalability from one to four cameras;
 - sensitivity to CPU, memory, USB I/O, and GPU interference;
+- independent IRQ-timer and thread wake-up latency characterization with Timerlat;
 - calibration and evaluation of per-thread `SCHED_DEADLINE` reservations.
 
 The main research questions are:
@@ -647,6 +648,8 @@ dormant or rarely activated
 
 ## 9. Tracing and Observer-Effect Validation
 
+### 9.1 LiME observer-effect validation
+
 The primary tracing stack consists of:
 
 - LiME/eBPF scheduler tracing;
@@ -673,6 +676,37 @@ Use at least three repetitions per instrumentation condition. Compare:
 
 This instrumentation factor is an observer-effect validation and does not need
 to be crossed with the complete main experiment matrix.
+
+### 9.2 Independent Timerlat platform characterization
+
+Use `rtla timerlat hist` as a separate active-probe experiment to characterize
+the platform's timer IRQ latency and real-time thread wake-up latency. Timerlat
+does not directly measure the D435/xHCI interrupt latency, and its periodic
+FIFO-priority workers perturb the system. Therefore, do not combine its samples
+with the authoritative LiME thread execution-time model or treat Timerlat runs
+as uninstrumented camera-performance baselines.
+
+Run the following causal minimum matrix independently under the non-RT and
+`PREEMPT_RT` kernels:
+
+| Case | Camera load | Injected noise |
+| --- | --- | --- |
+| `idle` | none | none |
+| `cpu_busy_only` | none | four register-only `SCHED_OTHER` workers |
+| `one_camera_representative` | one D435, representative workload | none |
+| `two_camera_stress` | two D435 cameras, stress workload | none |
+
+For every case, collect five 5-minute repetitions after a 10-second Timerlat
+warm-up. Fix the Timerlat period to 1 ms, its kernel workers to `SCHED_FIFO:95`,
+the histogram bucket width to 1 microsecond, and the CPU frequency to 1500 MHz.
+Record the complete per-CPU IRQ and thread histograms, overflow counts, maxima,
+and p50, p99, p99.9, and p99.99 estimates. Start camera cases first and begin
+Timerlat collection only after all cameras cross `steady_state_begin`.
+
+The CPU-only and camera-stress cases remain separate so a latency change can be
+attributed to runnable CPU contention or to camera-driven USB, DMA, interrupt,
+memory, and librealsense activity. Mixed camera-plus-noise experiments are
+optional follow-up diagnostics, not part of this minimum matrix.
 
 ## 10. SCHED_DEADLINE Calibration
 
@@ -839,6 +873,19 @@ noise: none, cpu_busy, memory_fixed_copy, shi_tomasi, usb_storage_sequential_rea
 
 Select the most important best-case, worst-case, baseline, and stress
 conditions for 60-minute measurements.
+
+### Stage G: independent Timerlat characterization
+
+```text
+kernel: default, PREEMPT_RT (separate boots)
+load: idle, CPU busy only, one-camera representative, two-camera stress
+duration: 5 min after a 10 s warm-up
+repetitions: 5
+tracing: Timerlat only; no LiME
+```
+
+Keep these active-probe results in a separate dataset from the main frame and
+thread timing campaigns.
 
 ## 13. Failure Semantics
 

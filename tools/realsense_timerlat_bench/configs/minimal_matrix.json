@@ -1,0 +1,79 @@
+{
+  "description": "Minimal RTNS Timerlat matrix. Run once under each declared kernel with five repetitions.",
+  "timerlat": {
+    "duration_seconds": 300,
+    "warmup_seconds": 10,
+    "period_us": 1000,
+    "cpu_list": "0-3",
+    "policy": "f:95",
+    "bucket_us": 1,
+    "entries": 10000
+  },
+  "cases": [
+    {
+      "case_id": "idle",
+      "description": "Timerlat platform baseline without a RealSense pipeline or injected noise.",
+      "camera": {
+        "enabled": false,
+        "count": 0
+      },
+      "noise": {
+        "cpu": "none"
+      }
+    },
+    {
+      "case_id": "cpu_busy_only",
+      "description": "Timerlat under four register-only SCHED_OTHER workers, without a camera.",
+      "camera": {
+        "enabled": false,
+        "count": 0
+      },
+      "noise": {
+        "cpu": "busy_loop",
+        "workers": 4
+      }
+    },
+    {
+      "case_id": "one_camera_representative",
+      "description": "One D435 representative depth-and-color stream under SCHED_OTHER.",
+      "camera": {
+        "enabled": true,
+        "count": 1,
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "fps": 30,
+        "warmup_frames": 300,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      },
+      "noise": {
+        "cpu": "none"
+      }
+    },
+    {
+      "case_id": "two_camera_stress",
+      "description": "Two D435 all-stream 60 FPS pipelines without injected noise.",
+      "camera": {
+        "enabled": true,
+        "count": 2,
+        "stream_mode": "d435_all",
+        "delivery": "wait",
+        "fps": 60,
+        "warmup_frames": 600,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      },
+      "noise": {
+        "cpu": "none"
+      }
+    }
+  ]
+}

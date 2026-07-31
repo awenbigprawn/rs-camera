@@ -13,6 +13,8 @@ on Intel RealSense cameras.
 - tools/realsense_thread_trace/: pthread lifecycle tracer and visualization
   tools.
 - tools/realsense_steady_bench/: steady-state frame, thread, and USB scaling campaign.
+- tools/realsense_timerlat_bench/: independent RTLA Timerlat platform-latency
+  matrix for non-RT and PREEMPT_RT kernels.
 - tools/realsense_bench_common/: shared Benchkit settings, commands, retries,
   recovery, system controls, cache handling, and result-artifact helpers.
 - deps/: pinned librealsense, LiME, and Benchkit dependencies.
@@ -139,6 +141,19 @@ Memory-bandwidth contention is available separately as fixed-size copies
 between thread-private buffers. Select it with
 `--memory-noise-modes none fixed_copy`, then fix the worker count and per-buffer
 size with `--memory-noise-workers N` and `--memory-noise-buffer-size-mib M`.
+
+## Timerlat platform campaign
+
+See tools/realsense_timerlat_bench/README.md. This independent campaign runs
+`rtla timerlat hist` under idle, CPU-only, one-camera representative, and
+two-camera stress loads. It is run once per booted kernel and keeps its active
+probe results separate from the LiME camera timing experiments. A short check is:
+
+    .venv/bin/python tools/realsense_timerlat_bench/run_timerlat_campaign.py \
+      --kernel-label linux_non_rt \
+      --case idle \
+      --duration-seconds 10 \
+      --nb-runs 1
 
 ## Startup timing campaign
 
