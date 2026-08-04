@@ -11,15 +11,16 @@ benchmark directories.
 | `commands.py` | `chrt`, LiME, `LD_PRELOAD`, sudo, and pthread tracer command construction |
 | `attempts.py` | Generic logical-run attempt loop, retry decisions, recovery aggregation, and common metadata |
 | `recovery.py` | Firmware plus parent composite-USB reset for one or more selected cameras |
-| `system_controls.py` | CPU lock/exact restore, optional RSUSB UVC binding, topology snapshots, and kernel-log windows |
+| `system_controls.py` | CPU lock/exact restore, RealSense autosuspend enforcement, optional RSUSB UVC binding, topology snapshots, and kernel-log windows |
 | `memory.py` | Filesystem cache dropping and its result fields |
 | `artifacts.py` | Selected-attempt resolution for canonical and historical layouts |
 | `results.py` | Common retry and recovery CSV fields |
 
 The benchmark adapter classifies each attempt. Startup classifies every failed
-probe as a startup failure and may retry it. Steady state retries only failures
-before the global `steady_state_begin` marker; failures after that marker are
-measured outcomes and are recovered without retry.
+probe as a startup failure and may retry it. Steady state performs a full reset
+and retries camera failures both before and after the global
+`steady_state_begin` marker. Scheduler and noise-setup errors are configuration
+failures, so they are neither hidden by camera resets nor retried.
 
 The canonical result layout retains every attempt:
 

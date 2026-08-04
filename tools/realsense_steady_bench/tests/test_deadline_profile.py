@@ -174,6 +174,12 @@ class DeadlineProfileModelTest(unittest.TestCase):
     def test_deadline_policy_starts_process_as_sched_other(self):
         self.assertEqual(scheduler_prefix("deadline", 80), ["chrt", "--other", "0"])
 
+    def test_rate_monotonic_policies_start_process_as_sched_other(self):
+        self.assertEqual(scheduler_prefix("rr-rm", 80), ["chrt", "--other", "0"])
+        self.assertEqual(
+            scheduler_prefix("fifo-rm", 80), ["chrt", "--other", "0"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

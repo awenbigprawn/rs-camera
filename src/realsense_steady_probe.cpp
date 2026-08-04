@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -34,7 +35,12 @@ struct options
     std::string summary_output;
     std::string events_output;
     std::string deadline_profile;
-    int deadline_apply_after_frames = 0;
+    std::string rate_monotonic_profile;
+    std::string rate_monotonic_policy;
+    std::string warmup_ready_file;
+    std::string measurement_start_gate;
+    int scheduler_apply_after_frames = 0;
+    int rate_monotonic_highest_priority = 80;
     int camera_count = 1;
     int depth_width = 848;
     int depth_height = 480;
@@ -45,7 +51,9 @@ struct options
     int warmup_frames = 30;
     int frame_timeout_ms = 1500;
     int startup_timeout_ms = 15000;
+    int measurement_duration_ms = 0;
     int measurement_timeout_ms = 0;
+    int measurement_gate_timeout_ms = 0;
 };
 
 struct stats
@@ -92,6 +100,8 @@ struct camera_metrics
     uint64_t deliveries = 0;
     uint64_t frames = 0;
     uint64_t timeouts = 0;
+    uint64_t pre_measurement_timeouts = 0;
+    uint64_t measurement_timeouts = 0;
     uint64_t start_begin_ns = 0;
     uint64_t start_end_ns = 0;
     uint64_t stop_begin_ns = 0;
@@ -100,13 +110,37 @@ struct camera_metrics
     uint64_t first_measured_ns = 0;
     uint64_t last_measured_ns = 0;
     uint64_t last_delivery_ns = 0;
-    bool deadline_ready = false;
+    bool scheduler_ready = false;
     bool warmed = false;
     bool completed = false;
     std::vector<double> delivery_interarrival_ms;
     std::vector<double> wait_ms;
     std::map<std::string, stream_metrics> streams;
     std::vector<frame_event> events;
+};
+
+struct frame_freshness_metrics
+{
+    uint64_t observed_frames = 0;
+    uint64_t unique_frames = 0;
+    uint64_t duplicate_frames = 0;
+    uint64_t sequence_gaps = 0;
+    uint64_t nonadvancing_frames = 0;
+    uint64_t out_of_order_frames = 0;
+};
+
+struct delivery_freshness_metrics
+{
+    uint64_t fully_fresh_framesets = 0;
+    uint64_t partially_stale_framesets = 0;
+    uint64_t stale_framesets = 0;
+};
+
+struct camera_freshness_metrics
+{
+    frame_freshness_metrics frames;
+    delivery_freshness_metrics deliveries;
+    std::map<std::string, frame_freshness_metrics> streams;
 };
 
 struct camera_runtime
@@ -130,9 +164,11 @@ struct shared_control
     std::mutex mutex;
     std::condition_variable cv;
     std::atomic<bool> measurement_enabled{false};
+    std::atomic<uint64_t> measurement_deadline_ns{0};
+    std::atomic<bool> noise_transition_active{false};
     std::atomic<bool> stop{false};
     std::atomic<uint64_t> origin_ns{0};
-    size_t deadline_ready_cameras = 0;
+    size_t scheduler_ready_cameras = 0;
     size_t warmed_cameras = 0;
     size_t completed_cameras = 0;
     std::atomic<bool> failed{false};
@@ -167,6 +203,8 @@ options parse_args(int argc, char **argv)
             opts.frame_timeout_ms = std::stoi(value(arg));
         else if (arg == "--startup-timeout-ms")
             opts.startup_timeout_ms = std::stoi(value(arg));
+        else if (arg == "--measurement-duration-ms")
+            opts.measurement_duration_ms = std::stoi(value(arg));
         else if (arg == "--measurement-timeout-ms")
             opts.measurement_timeout_ms = std::stoi(value(arg));
         else if (arg == "--fps")
@@ -186,7 +224,21 @@ options parse_args(int argc, char **argv)
         else if (arg == "--deadline-profile")
             opts.deadline_profile = value(arg);
         else if (arg == "--deadline-apply-after-frames")
-            opts.deadline_apply_after_frames = std::stoi(value(arg));
+            opts.scheduler_apply_after_frames = std::stoi(value(arg));
+        else if (arg == "--scheduler-apply-after-frames")
+            opts.scheduler_apply_after_frames = std::stoi(value(arg));
+        else if (arg == "--rate-monotonic-profile")
+            opts.rate_monotonic_profile = value(arg);
+        else if (arg == "--rate-monotonic-policy")
+            opts.rate_monotonic_policy = value(arg);
+        else if (arg == "--rate-monotonic-highest-priority")
+            opts.rate_monotonic_highest_priority = std::stoi(value(arg));
+        else if (arg == "--warmup-ready-file")
+            opts.warmup_ready_file = value(arg);
+        else if (arg == "--measurement-start-gate")
+            opts.measurement_start_gate = value(arg);
+        else if (arg == "--measurement-gate-timeout-ms")
+            opts.measurement_gate_timeout_ms = std::stoi(value(arg));
         else if (arg == "--help" || arg == "-h")
         {
             std::cout
@@ -196,6 +248,7 @@ options parse_args(int argc, char **argv)
                 << "  --stream-mode depth|depth_color|d435_all\n"
                 << "  --delivery wait|callback\n"
                 << "  --frames N                   Measured deliveries per camera\n"
+                << "  --measurement-duration-ms N Measure for a fixed wall-clock duration; zero uses --frames\n"
                 << "  --warmup-frames N\n"
                 << "  --frame-timeout-ms N --startup-timeout-ms N\n"
                 << "  --measurement-timeout-ms N   Zero selects an automatic deadline\n"
@@ -204,7 +257,14 @@ options parse_args(int argc, char **argv)
                 << "  --color-width N --color-height N\n"
                 << "  --summary-output PATH --events-output PATH\n"
                 << "  --deadline-profile PATH       Apply per-thread SCHED_DEADLINE during warm-up\n"
-                << "  --deadline-apply-after-frames N  Per-camera pre-DEADLINE warm-up; zero is automatic\n";
+                << "  --rate-monotonic-profile PATH Apply per-thread fixed-priority scheduling during warm-up\n"
+                << "  --rate-monotonic-policy rr|fifo\n"
+                << "  --rate-monotonic-highest-priority N\n"
+                << "  --scheduler-apply-after-frames N  Per-camera pre-scheduler warm-up; zero is automatic\n"
+                << "  --deadline-apply-after-frames N  Compatibility alias for the previous option\n"
+                << "  --warmup-ready-file PATH      Signal that every camera is warm\n"
+                << "  --measurement-start-gate PATH Wait for this file before measuring\n"
+                << "  --measurement-gate-timeout-ms N  Maximum gate wait\n";
             std::exit(0);
         }
         else
@@ -215,20 +275,52 @@ options parse_args(int argc, char **argv)
         opts.camera_count = static_cast<int>(opts.serials.size());
     if (opts.camera_count <= 0 || opts.frames <= 0 || opts.fps <= 0)
         throw std::runtime_error("camera-count, frames, and fps must be positive");
+    if (opts.measurement_duration_ms < 0)
+        throw std::runtime_error("measurement-duration-ms must be non-negative");
+    if (opts.measurement_duration_ms > 0 && opts.measurement_timeout_ms > 0)
+        throw std::runtime_error(
+            "measurement-duration-ms and measurement-timeout-ms are mutually exclusive");
     if (opts.warmup_frames < 0 || opts.frame_timeout_ms <= 0 || opts.startup_timeout_ms <= 0)
         throw std::runtime_error("Invalid warm-up or timeout value");
     if (opts.delivery != "wait" && opts.delivery != "callback")
         throw std::runtime_error("Unsupported delivery mode: " + opts.delivery);
-    if (opts.deadline_apply_after_frames < 0)
-        throw std::runtime_error("deadline-apply-after-frames must be non-negative");
-    if (!opts.deadline_profile.empty())
+    if (opts.scheduler_apply_after_frames < 0)
+        throw std::runtime_error("scheduler-apply-after-frames must be non-negative");
+    const bool has_warmup_file = !opts.warmup_ready_file.empty();
+    const bool has_measurement_gate = !opts.measurement_start_gate.empty();
+    if (has_warmup_file != has_measurement_gate)
+        throw std::runtime_error(
+            "warmup-ready-file and measurement-start-gate must be used together");
+    if (has_measurement_gate && opts.measurement_gate_timeout_ms <= 0)
+        throw std::runtime_error(
+            "measurement-gate-timeout-ms must be positive when a gate is used");
+    const bool deadline_requested = !opts.deadline_profile.empty();
+    const bool rate_monotonic_profile_requested =
+        !opts.rate_monotonic_profile.empty();
+    const bool rate_monotonic_policy_requested =
+        !opts.rate_monotonic_policy.empty();
+    if (deadline_requested &&
+        (rate_monotonic_profile_requested || rate_monotonic_policy_requested))
+        throw std::runtime_error(
+            "SCHED_DEADLINE and rate-monotonic scheduling are mutually exclusive");
+    if (rate_monotonic_profile_requested != rate_monotonic_policy_requested)
+        throw std::runtime_error(
+            "rate-monotonic-profile and rate-monotonic-policy must be used together");
+    if (rate_monotonic_policy_requested && opts.rate_monotonic_policy != "rr" &&
+        opts.rate_monotonic_policy != "fifo")
+        throw std::runtime_error("rate-monotonic-policy must be rr or fifo");
+    if (rate_monotonic_policy_requested &&
+        opts.rate_monotonic_highest_priority <= 0)
+        throw std::runtime_error(
+            "rate-monotonic-highest-priority must be positive");
+    if (deadline_requested || rate_monotonic_profile_requested)
     {
         if (opts.warmup_frames < 2)
             throw std::runtime_error(
-                "SCHED_DEADLINE requires at least two warm-up deliveries");
-        if (opts.deadline_apply_after_frames >= opts.warmup_frames)
+                "Modeled scheduling requires at least two warm-up deliveries");
+        if (opts.scheduler_apply_after_frames >= opts.warmup_frames)
             throw std::runtime_error(
-                "deadline-apply-after-frames must be less than warmup-frames");
+                "scheduler-apply-after-frames must be less than warmup-frames");
     }
     return opts;
 }
@@ -258,6 +350,74 @@ std::string json_escape(const std::string &value)
 std::string quoted(const std::string &value)
 {
     return "\"" + json_escape(value) + "\"";
+}
+
+void set_failure(shared_control &control, const std::string &message);
+
+void write_atomic_timestamp(const std::string &path, uint64_t timestamp_ns)
+{
+    const std::filesystem::path destination(path);
+    const std::filesystem::path temporary = destination.string() + ".tmp";
+    {
+        std::ofstream out(temporary);
+        if (!out)
+            throw std::runtime_error("Cannot create transition file: " + path);
+        out << timestamp_ns << "\n";
+    }
+    std::error_code error;
+    std::filesystem::rename(temporary, destination, error);
+    if (error)
+    {
+        std::filesystem::remove(temporary);
+        throw std::runtime_error(
+            "Cannot publish transition file " + path + ": " + error.message());
+    }
+}
+
+std::string read_text(const std::filesystem::path &path)
+{
+    std::ifstream in(path);
+    std::ostringstream contents;
+    contents << in.rdbuf();
+    return contents.str();
+}
+
+uint64_t wait_for_measurement_gate(const options &opts, shared_control &control)
+{
+    const std::filesystem::path gate(opts.measurement_start_gate);
+    const std::filesystem::path error_path(opts.measurement_start_gate + ".error");
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(opts.measurement_gate_timeout_ms);
+    while (!control.failed.load())
+    {
+        if (std::filesystem::exists(error_path))
+        {
+            std::string detail = read_text(error_path);
+            while (!detail.empty() && (detail.back() == '\n' || detail.back() == '\r'))
+                detail.pop_back();
+            set_failure(
+                control,
+                "Noise setup failed: " +
+                    (detail.empty() ? std::string("unknown error") : detail));
+            return 0;
+        }
+        if (std::filesystem::exists(gate))
+        {
+            std::ifstream in(gate);
+            uint64_t timestamp_ns = 0;
+            if (in >> timestamp_ns && timestamp_ns > 0)
+                return timestamp_ns;
+            set_failure(control, "Noise setup failed: invalid measurement gate");
+            return 0;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            set_failure(control, "Noise setup failed: measurement gate timed out");
+            return 0;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return 0;
 }
 
 std::string csv_field(const std::string &value)
@@ -418,10 +578,21 @@ void record_frame(camera_metrics &metrics,
                               stream.timestamp_domain});
 }
 
-int deadline_apply_threshold(const options &opts)
+bool modeled_scheduler_requested(const options &opts)
 {
-    if (opts.deadline_apply_after_frames > 0)
-        return opts.deadline_apply_after_frames;
+    return !opts.deadline_profile.empty() ||
+           !opts.rate_monotonic_profile.empty();
+}
+
+bool fixed_duration_measurement(const options &opts)
+{
+    return opts.measurement_duration_ms > 0;
+}
+
+int scheduler_apply_threshold(const options &opts)
+{
+    if (opts.scheduler_apply_after_frames > 0)
+        return opts.scheduler_apply_after_frames;
     return std::min(opts.fps, std::max(1, opts.warmup_frames / 10));
 }
 
@@ -432,7 +603,7 @@ void record_delivery(camera_runtime &camera,
                      const options &opts,
                      shared_control &control)
 {
-    bool became_deadline_ready = false;
+    bool became_scheduler_ready = false;
     bool became_warm = false;
     bool became_complete = false;
     {
@@ -446,12 +617,12 @@ void record_delivery(camera_runtime &camera,
             if (!metrics.first_warmup_ns)
                 metrics.first_warmup_ns = host_ns;
             ++metrics.warmup_deliveries;
-            if (!opts.deadline_profile.empty() && !metrics.deadline_ready &&
+            if (modeled_scheduler_requested(opts) && !metrics.scheduler_ready &&
                 metrics.warmup_deliveries >=
-                    static_cast<uint64_t>(deadline_apply_threshold(opts)))
+                    static_cast<uint64_t>(scheduler_apply_threshold(opts)))
             {
-                metrics.deadline_ready = true;
-                became_deadline_ready = true;
+                metrics.scheduler_ready = true;
+                became_scheduler_ready = true;
             }
             if (metrics.warmup_deliveries >= static_cast<uint64_t>(opts.warmup_frames))
             {
@@ -461,6 +632,9 @@ void record_delivery(camera_runtime &camera,
         }
         else if (control.measurement_enabled.load())
         {
+            const uint64_t deadline_ns = control.measurement_deadline_ns.load();
+            if (deadline_ns && host_ns > deadline_ns)
+                return;
             ++metrics.deliveries;
             if (!metrics.first_measured_ns)
                 metrics.first_measured_ns = host_ns;
@@ -480,7 +654,8 @@ void record_delivery(camera_runtime &camera,
             else
                 record_frame(metrics, frame, host_ns, metrics.deliveries);
 
-            if (metrics.deliveries >= static_cast<uint64_t>(opts.frames))
+            if (!fixed_duration_measurement(opts) &&
+                metrics.deliveries >= static_cast<uint64_t>(opts.frames))
             {
                 metrics.completed = true;
                 became_complete = true;
@@ -488,10 +663,10 @@ void record_delivery(camera_runtime &camera,
         }
     }
 
-    if (became_deadline_ready)
+    if (became_scheduler_ready)
     {
         std::lock_guard<std::mutex> lock(control.mutex);
-        ++control.deadline_ready_cameras;
+        ++control.scheduler_ready_cameras;
         control.cv.notify_all();
     }
     if (became_warm)
@@ -517,6 +692,7 @@ void wait_loop(camera_runtime &camera,
     pthread_setname_np(pthread_self(), name.substr(0, 15).c_str());
     while (!control.stop.load())
     {
+        const bool measurement_was_enabled = control.measurement_enabled.load();
         const uint64_t begin_ns = rs_trace_boottime_ns();
         try
         {
@@ -533,8 +709,21 @@ void wait_loop(camera_runtime &camera,
             {
                 std::lock_guard<std::mutex> lock(camera.metrics.mutex);
                 ++camera.metrics.timeouts;
+                if (measurement_was_enabled)
+                    ++camera.metrics.measurement_timeouts;
+                else
+                    ++camera.metrics.pre_measurement_timeouts;
             }
-            set_failure(control, camera.serial + ": " + error.what());
+            if (measurement_was_enabled)
+            {
+                if (!control.measurement_enabled.load() || control.stop.load())
+                    break;
+                continue;
+            }
+            const std::string prefix = control.noise_transition_active.load()
+                                           ? "Noise transition frame failure: "
+                                           : "";
+            set_failure(control, prefix + camera.serial + ": " + error.what());
             break;
         }
     }
@@ -589,6 +778,140 @@ uint64_t total_drops(const camera_metrics &metrics)
     return result;
 }
 
+camera_freshness_metrics analyze_freshness(const camera_metrics &metrics)
+{
+    struct working_stream
+    {
+        bool has_highest = false;
+        uint64_t highest = 0;
+        uint64_t nonadvancing_frames = 0;
+        uint64_t out_of_order_frames = 0;
+        std::vector<uint64_t> frame_numbers;
+    };
+
+    camera_freshness_metrics result;
+    std::map<std::string, working_stream> streams;
+    bool have_delivery = false;
+    uint64_t current_delivery = 0;
+    bool delivery_has_frame = false;
+    bool delivery_has_advance = false;
+    bool delivery_all_advance = true;
+
+    auto finish_delivery = [&]() {
+        if (!delivery_has_frame)
+            return;
+        if (!delivery_has_advance)
+            ++result.deliveries.stale_framesets;
+        else if (delivery_all_advance)
+            ++result.deliveries.fully_fresh_framesets;
+        else
+            ++result.deliveries.partially_stale_framesets;
+    };
+
+    for (const auto &event : metrics.events)
+    {
+        if (!have_delivery || event.delivery != current_delivery)
+        {
+            if (have_delivery)
+                finish_delivery();
+            have_delivery = true;
+            current_delivery = event.delivery;
+            delivery_has_frame = false;
+            delivery_has_advance = false;
+            delivery_all_advance = true;
+        }
+
+        const std::string key = event.stream + "#" + std::to_string(event.stream_index);
+        auto &stream = streams[key];
+        const bool advanced = !stream.has_highest || event.frame_number > stream.highest;
+        if (advanced)
+        {
+            stream.has_highest = true;
+            stream.highest = event.frame_number;
+        }
+        else
+        {
+            ++stream.nonadvancing_frames;
+            if (event.frame_number < stream.highest)
+                ++stream.out_of_order_frames;
+        }
+        stream.frame_numbers.push_back(event.frame_number);
+        delivery_has_frame = true;
+        delivery_has_advance = delivery_has_advance || advanced;
+        delivery_all_advance = delivery_all_advance && advanced;
+    }
+    if (have_delivery)
+        finish_delivery();
+
+    for (auto &entry : streams)
+    {
+        auto &working = entry.second;
+        auto &numbers = working.frame_numbers;
+        std::sort(numbers.begin(), numbers.end());
+        const auto unique_end = std::unique(numbers.begin(), numbers.end());
+        const uint64_t observed = numbers.size();
+        const uint64_t unique = static_cast<uint64_t>(
+            std::distance(numbers.begin(), unique_end));
+
+        frame_freshness_metrics stream_result;
+        stream_result.observed_frames = observed;
+        stream_result.unique_frames = unique;
+        stream_result.duplicate_frames = observed - unique;
+        stream_result.nonadvancing_frames = working.nonadvancing_frames;
+        stream_result.out_of_order_frames = working.out_of_order_frames;
+        if (unique > 0)
+        {
+            const uint64_t minimum = numbers.front();
+            const uint64_t maximum = *(unique_end - 1);
+            stream_result.sequence_gaps = maximum - minimum + 1 - unique;
+        }
+        result.streams.emplace(entry.first, stream_result);
+
+        result.frames.observed_frames += stream_result.observed_frames;
+        result.frames.unique_frames += stream_result.unique_frames;
+        result.frames.duplicate_frames += stream_result.duplicate_frames;
+        result.frames.sequence_gaps += stream_result.sequence_gaps;
+        result.frames.nonadvancing_frames += stream_result.nonadvancing_frames;
+        result.frames.out_of_order_frames += stream_result.out_of_order_frames;
+    }
+    return result;
+}
+
+void add_freshness(camera_freshness_metrics &destination,
+                   const camera_freshness_metrics &source)
+{
+    destination.frames.observed_frames += source.frames.observed_frames;
+    destination.frames.unique_frames += source.frames.unique_frames;
+    destination.frames.duplicate_frames += source.frames.duplicate_frames;
+    destination.frames.sequence_gaps += source.frames.sequence_gaps;
+    destination.frames.nonadvancing_frames += source.frames.nonadvancing_frames;
+    destination.frames.out_of_order_frames += source.frames.out_of_order_frames;
+    destination.deliveries.fully_fresh_framesets +=
+        source.deliveries.fully_fresh_framesets;
+    destination.deliveries.partially_stale_framesets +=
+        source.deliveries.partially_stale_framesets;
+    destination.deliveries.stale_framesets += source.deliveries.stale_framesets;
+}
+
+void write_frame_freshness(std::ostream &out, const frame_freshness_metrics &metrics)
+{
+    out << "\"observed_frames\":" << metrics.observed_frames
+        << ",\"unique_frames\":" << metrics.unique_frames
+        << ",\"duplicate_frames\":" << metrics.duplicate_frames
+        << ",\"sequence_gaps\":" << metrics.sequence_gaps
+        << ",\"nonadvancing_frames\":" << metrics.nonadvancing_frames
+        << ",\"out_of_order_frames\":" << metrics.out_of_order_frames;
+}
+
+void write_delivery_freshness(std::ostream &out,
+                              const delivery_freshness_metrics &metrics)
+{
+    out << "\"fully_fresh_framesets\":" << metrics.fully_fresh_framesets
+        << ",\"partially_stale_framesets\":"
+        << metrics.partially_stale_framesets
+        << ",\"stale_framesets\":" << metrics.stale_framesets;
+}
+
 void write_active_streams(std::ostream &out, const rs2::pipeline_profile &profile)
 {
     out << "[";
@@ -615,12 +938,30 @@ void write_active_streams(std::ostream &out, const rs2::pipeline_profile &profil
 void write_summary(const std::string &path,
                    const options &opts,
                    const std::vector<std::unique_ptr<camera_runtime>> &cameras,
+                   uint64_t warmup_ready_ns,
+                   uint64_t measurement_gate_open_ns,
                    uint64_t measurement_start_ns,
                    uint64_t measurement_end_ns,
                    bool success,
                    const std::string &error,
-                   const rs_camera::deadline_application *deadline_result)
+                   const rs_camera::deadline_application *deadline_result,
+                   const rs_camera::rate_monotonic_application *rate_monotonic_result)
 {
+    rs_trace_phase_marker("freshness_analysis_begin");
+    const auto freshness_begin = std::chrono::steady_clock::now();
+    std::vector<camera_freshness_metrics> camera_freshness;
+    camera_freshness.reserve(cameras.size());
+    camera_freshness_metrics aggregate_freshness;
+    for (const auto &camera : cameras)
+    {
+        std::lock_guard<std::mutex> lock(camera->metrics.mutex);
+        camera_freshness.push_back(analyze_freshness(camera->metrics));
+        add_freshness(aggregate_freshness, camera_freshness.back());
+    }
+    const double freshness_analysis_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - freshness_begin).count();
+    rs_trace_phase_marker("freshness_analysis_end");
+
     std::ofstream out(path);
     if (!out)
         throw std::runtime_error("Cannot open summary output: " + path);
@@ -630,6 +971,8 @@ void write_summary(const std::string &path,
     uint64_t frames = 0;
     uint64_t drops = 0;
     uint64_t timeouts = 0;
+    uint64_t pre_measurement_timeouts = 0;
+    uint64_t measurement_timeouts = 0;
     uint64_t raw_events = 0;
     std::vector<double> delivery_gaps;
     std::vector<double> wait_times;
@@ -640,6 +983,8 @@ void write_summary(const std::string &path,
         frames += camera->metrics.frames;
         drops += total_drops(camera->metrics);
         timeouts += camera->metrics.timeouts;
+        pre_measurement_timeouts += camera->metrics.pre_measurement_timeouts;
+        measurement_timeouts += camera->metrics.measurement_timeouts;
         raw_events += camera->metrics.events.size();
         delivery_gaps.insert(delivery_gaps.end(),
                              camera->metrics.delivery_interarrival_ms.begin(),
@@ -651,40 +996,75 @@ void write_summary(const std::string &path,
     sched_param parameter{};
     sched_getparam(0, &parameter);
     out << "{\n"
-        << "  \"schema_version\": 3,\n"
+        << "  \"schema_version\": 7,\n"
         << "  \"success\": " << (success ? "true" : "false") << ",\n"
         << "  \"error\": " << quoted(error) << ",\n"
         << "  \"scheduler\": {\"policy\":" << quoted(scheduler_policy())
         << ",\"priority\":" << parameter.sched_priority
         << ",\"main_thread_policy\":" << quoted(scheduler_policy())
         << ",\"steady_worker_policy\":"
-        << quoted(deadline_result ? "SCHED_DEADLINE" : scheduler_policy())
+        << quoted(deadline_result
+                      ? "SCHED_DEADLINE"
+                      : (rate_monotonic_result
+                             ? rate_monotonic_result->policy
+                             : scheduler_policy()))
         << "},\n"
         << "  \"deadline\": "
         << (deadline_result
                 ? rs_camera::deadline_application_json(*deadline_result)
                 : "null")
         << ",\n"
+        << "  \"rate_monotonic\": "
+        << (rate_monotonic_result
+                ? rs_camera::rate_monotonic_application_json(
+                      *rate_monotonic_result)
+                : "null")
+        << ",\n"
         << "  \"run\": {\"camera_count\":" << cameras.size()
         << ",\"stream_mode\":" << quoted(opts.stream_mode)
         << ",\"delivery\":" << quoted(opts.delivery)
+        << ",\"measurement_mode\":"
+        << quoted(fixed_duration_measurement(opts) ? "duration" : "deliveries")
         << ",\"frames_per_camera\":" << opts.frames
+        << ",\"measurement_duration_ms\":" << opts.measurement_duration_ms
         << ",\"warmup_frames\":" << opts.warmup_frames
+        << ",\"scheduler_apply_after_frames\":"
+        << (modeled_scheduler_requested(opts) ? scheduler_apply_threshold(opts) : 0)
         << ",\"deadline_apply_after_frames\":"
-        << (opts.deadline_profile.empty() ? 0 : deadline_apply_threshold(opts))
+        << (opts.deadline_profile.empty() ? 0 : scheduler_apply_threshold(opts))
         << ",\"fps\":" << opts.fps
         << ",\"frame_timeout_ms\":" << opts.frame_timeout_ms
         << ",\"startup_timeout_ms\":" << opts.startup_timeout_ms << "},\n"
+        << "  \"transition\": {\"noise_gate_enabled\":"
+        << (!opts.measurement_start_gate.empty() ? "true" : "false")
+        << ",\"warmup_ready_boottime_ns\":" << warmup_ready_ns
+        << ",\"measurement_gate_open_boottime_ns\":" << measurement_gate_open_ns
+        << ",\"warmup_to_gate_ms\":"
+        << (measurement_gate_open_ns >= warmup_ready_ns
+                ? ns_to_ms(measurement_gate_open_ns - warmup_ready_ns)
+                : 0.0)
+        << "},\n"
         << "  \"measurement\": {\"start_boottime_ns\":" << measurement_start_ns
         << ",\"end_boottime_ns\":" << measurement_end_ns
+        << ",\"mode\":"
+        << quoted(fixed_duration_measurement(opts) ? "duration" : "deliveries")
+        << ",\"requested_duration_ms\":" << opts.measurement_duration_ms
         << ",\"duration_ms\":"
         << (measurement_end_ns >= measurement_start_ns
                 ? ns_to_ms(measurement_end_ns - measurement_start_ns)
                 : 0.0)
         << "},\n"
+        << "  \"postprocess\": {\"freshness_analysis_ms\":"
+        << freshness_analysis_ms << "},\n"
         << "  \"aggregate\": {\"deliveries\":" << deliveries << ",\"frames\":" << frames
         << ",\"drops\":" << drops << ",\"timeouts\":" << timeouts
-        << ",\"raw_events\":" << raw_events << ",\"delivery_interarrival_ms\":";
+        << ",\"pre_measurement_timeouts\":" << pre_measurement_timeouts
+        << ",\"measurement_timeouts\":" << measurement_timeouts
+        << ",\"raw_events\":" << raw_events << ",";
+    write_frame_freshness(out, aggregate_freshness.frames);
+    out << ",";
+    write_delivery_freshness(out, aggregate_freshness.deliveries);
+    out << ",\"delivery_interarrival_ms\":";
     write_stats(out, summarize(delivery_gaps));
     out << ",\"wait_ms\":";
     write_stats(out, summarize(wait_times));
@@ -695,6 +1075,7 @@ void write_summary(const std::string &path,
         const auto &camera = cameras[i];
         std::lock_guard<std::mutex> lock(camera->metrics.mutex);
         const auto &metrics = camera->metrics;
+        const auto &freshness = camera_freshness[i];
         if (i)
             out << ",";
         out << "\n    {\"index\":" << i
@@ -713,6 +1094,13 @@ void write_summary(const std::string &path,
             << ",\"frames\":" << metrics.frames
             << ",\"drops\":" << total_drops(metrics)
             << ",\"timeouts\":" << metrics.timeouts
+            << ",\"pre_measurement_timeouts\":" << metrics.pre_measurement_timeouts
+            << ",\"measurement_timeouts\":" << metrics.measurement_timeouts
+            << ",";
+        write_frame_freshness(out, freshness.frames);
+        out << ",";
+        write_delivery_freshness(out, freshness.deliveries);
+        out
             << ",\"first_warmup_boottime_ns\":" << metrics.first_warmup_ns
             << ",\"first_measured_boottime_ns\":" << metrics.first_measured_ns
             << ",\"last_measured_boottime_ns\":" << metrics.last_measured_ns
@@ -730,9 +1118,16 @@ void write_summary(const std::string &path,
                 out << ",";
             first_stream = false;
             const auto &stream = entry.second;
+            const auto freshness_it = freshness.streams.find(entry.first);
+            const frame_freshness_metrics empty_freshness;
+            const auto &stream_freshness = freshness_it != freshness.streams.end()
+                                               ? freshness_it->second
+                                               : empty_freshness;
             out << quoted(entry.first) << ":{\"frames\":" << stream.frames
                 << ",\"drops\":" << stream.drops
-                << ",\"timestamp_domain\":" << quoted(stream.timestamp_domain)
+                << ",";
+            write_frame_freshness(out, stream_freshness);
+            out << ",\"timestamp_domain\":" << quoted(stream.timestamp_domain)
                 << ",\"sensor_interarrival_ms\":";
             write_stats(out, summarize(stream.sensor_interarrival_ms));
             out << ",\"host_interarrival_ms\":";
@@ -835,7 +1230,9 @@ try
     }
 
     std::unique_ptr<rs_camera::deadline_application> deadline_result;
-    if (!opts.deadline_profile.empty())
+    std::unique_ptr<rs_camera::rate_monotonic_application>
+        rate_monotonic_result;
+    if (modeled_scheduler_requested(opts))
     {
         {
             std::unique_lock<std::mutex> lock(control.mutex);
@@ -844,35 +1241,74 @@ try
                 std::chrono::milliseconds(opts.startup_timeout_ms),
                 [&]() {
                     return control.failed.load() ||
-                           control.deadline_ready_cameras == cameras.size();
+                           control.scheduler_ready_cameras == cameras.size();
                 });
             if (!ready && !control.failed.load())
             {
                 lock.unlock();
                 set_failure(
                     control,
-                    "Timed out before the SCHED_DEADLINE warm-up transition");
+                    "Timed out before the modeled-scheduler warm-up transition");
             }
         }
         if (!control.failed.load())
         {
-            rs_trace_phase_marker("deadline_apply_begin");
             try
             {
-                deadline_result = std::make_unique<rs_camera::deadline_application>(
-                    rs_camera::apply_deadline_profile(opts.deadline_profile));
-                std::cout << "RS_DEADLINE {\"profile_entries\":"
-                          << deadline_result->profile_entries
-                          << ",\"live_threads\":" << deadline_result->live_threads
-                          << ",\"applied\":true}\n";
-                rs_trace_phase_marker("deadline_apply_end");
+                if (!opts.deadline_profile.empty())
+                {
+                    rs_trace_phase_marker("deadline_apply_begin");
+                    deadline_result =
+                        std::make_unique<rs_camera::deadline_application>(
+                            rs_camera::apply_deadline_profile(
+                                opts.deadline_profile));
+                    std::cout << "RS_DEADLINE {\"profile_entries\":"
+                              << deadline_result->profile_entries
+                              << ",\"live_threads\":"
+                              << deadline_result->live_threads
+                              << ",\"applied\":true}\n";
+                    rs_trace_phase_marker("deadline_apply_end");
+                }
+                else
+                {
+                    rs_trace_phase_marker("rate_monotonic_apply_begin");
+                    const int policy = opts.rate_monotonic_policy == "rr"
+                                           ? SCHED_RR
+                                           : SCHED_FIFO;
+                    rate_monotonic_result = std::make_unique<
+                        rs_camera::rate_monotonic_application>(
+                        rs_camera::apply_rate_monotonic_profile(
+                            opts.rate_monotonic_profile,
+                            policy,
+                            opts.rate_monotonic_highest_priority));
+                    std::cout << "RS_RATE_MONOTONIC {\"policy\":\""
+                              << rate_monotonic_result->policy
+                              << "\",\"profile_entries\":"
+                              << rate_monotonic_result->profile_entries
+                              << ",\"live_threads\":"
+                              << rate_monotonic_result->live_threads
+                              << ",\"priority_levels\":"
+                              << rate_monotonic_result->priority_levels
+                              << ",\"highest_priority\":"
+                              << rate_monotonic_result->highest_priority
+                              << ",\"lowest_priority\":"
+                              << rate_monotonic_result->lowest_priority
+                              << ",\"applied\":true}\n";
+                    rs_trace_phase_marker("rate_monotonic_apply_end");
+                }
             }
             catch (const std::exception &error)
             {
-                rs_trace_phase_marker("deadline_apply_error");
+                rs_trace_phase_marker(
+                    opts.deadline_profile.empty()
+                        ? "rate_monotonic_apply_error"
+                        : "deadline_apply_error");
                 set_failure(
                     control,
-                    std::string("SCHED_DEADLINE setup failed: ") + error.what());
+                    std::string(opts.deadline_profile.empty()
+                                    ? "Rate-monotonic setup failed: "
+                                    : "SCHED_DEADLINE setup failed: ") +
+                        error.what());
             }
         }
     }
@@ -894,30 +1330,67 @@ try
         }
     }
 
+    uint64_t warmup_ready_ns = 0;
+    uint64_t measurement_gate_open_ns = 0;
     uint64_t measurement_start_ns = 0;
     uint64_t measurement_end_ns = 0;
     if (!control.failed.load())
     {
+        warmup_ready_ns = rs_trace_boottime_ns();
+        rs_trace_phase_marker("camera_warmup_complete");
+        if (!opts.measurement_start_gate.empty())
+        {
+            write_atomic_timestamp(opts.warmup_ready_file, warmup_ready_ns);
+            rs_trace_phase_marker("noise_start_wait_begin");
+            control.noise_transition_active.store(true);
+            measurement_gate_open_ns = wait_for_measurement_gate(opts, control);
+            control.noise_transition_active.store(false);
+            if (!control.failed.load())
+                rs_trace_phase_marker("noise_ready");
+        }
+        else
+            measurement_gate_open_ns = warmup_ready_ns;
+    }
+    if (!control.failed.load())
+    {
         measurement_start_ns = rs_trace_boottime_ns();
         control.origin_ns.store(measurement_start_ns);
+        if (fixed_duration_measurement(opts))
+        {
+            control.measurement_deadline_ns.store(
+                measurement_start_ns +
+                static_cast<uint64_t>(opts.measurement_duration_ms) * 1000000ULL);
+        }
         rs_trace_phase_marker("steady_state_begin");
         control.measurement_enabled.store(true);
-
-        const int timeout_ms = opts.measurement_timeout_ms > 0
-                                   ? opts.measurement_timeout_ms
-                                   : automatic_measurement_timeout_ms(opts);
         std::unique_lock<std::mutex> lock(control.mutex);
-        const bool complete = control.cv.wait_for(
-            lock,
-            std::chrono::milliseconds(timeout_ms),
-            [&]() { return control.failed.load() || control.completed_cameras == cameras.size(); });
-        if (!complete && !control.failed.load())
+        if (fixed_duration_measurement(opts))
         {
-            lock.unlock();
-            set_failure(control, "Timed out during steady-state measurement");
+            control.cv.wait_for(
+                lock,
+                std::chrono::milliseconds(opts.measurement_duration_ms),
+                [&]() { return control.failed.load(); });
         }
-        measurement_end_ns = rs_trace_boottime_ns();
+        else
+        {
+            const int timeout_ms = opts.measurement_timeout_ms > 0
+                                       ? opts.measurement_timeout_ms
+                                       : automatic_measurement_timeout_ms(opts);
+            const bool complete = control.cv.wait_for(
+                lock,
+                std::chrono::milliseconds(timeout_ms),
+                [&]() {
+                    return control.failed.load() ||
+                           control.completed_cameras == cameras.size();
+                });
+            if (!complete && !control.failed.load())
+            {
+                lock.unlock();
+                set_failure(control, "Timed out during steady-state measurement");
+            }
+        }
         control.measurement_enabled.store(false);
+        measurement_end_ns = rs_trace_boottime_ns();
         rs_trace_phase_marker("steady_state_end");
     }
 
@@ -950,14 +1423,19 @@ try
         write_summary(opts.summary_output,
                       opts,
                       cameras,
+                      warmup_ready_ns,
+                      measurement_gate_open_ns,
                       measurement_start_ns,
                       measurement_end_ns,
                       !control.failed.load(),
                       control.error,
-                      deadline_result.get());
+                      deadline_result.get(),
+                      rate_monotonic_result.get());
 
     std::cout << "RS_STEADY_RESULT {\"success\":" << (!control.failed.load() ? "true" : "false")
               << ",\"camera_count\":" << cameras.size()
+              << ",\"measurement_mode\":"
+              << quoted(fixed_duration_measurement(opts) ? "duration" : "deliveries")
               << ",\"frames_per_camera\":" << opts.frames
               << ",\"measurement_ms\":"
               << (measurement_end_ns >= measurement_start_ns

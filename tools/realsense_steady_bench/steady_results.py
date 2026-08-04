@@ -83,6 +83,17 @@ def _add_camera_results(
             "frames",
             "drops",
             "timeouts",
+            "pre_measurement_timeouts",
+            "measurement_timeouts",
+            "observed_frames",
+            "unique_frames",
+            "duplicate_frames",
+            "sequence_gaps",
+            "nonadvancing_frames",
+            "out_of_order_frames",
+            "fully_fresh_framesets",
+            "partially_stale_framesets",
+            "stale_framesets",
         ):
             result[f"{prefix}_{key}"] = camera.get(key, "")
         flatten(
@@ -169,6 +180,7 @@ def parse_steady_results(
             "steady_worker_policy", ""
         ),
         "deadline_profile_applied": data.get("deadline") is not None,
+        "rate_monotonic_profile_applied": data.get("rate_monotonic") is not None,
         "cpu_noise_mode": run_variables["cpu_noise"],
         "cpu_noise_enabled": run_variables["cpu_noise"] != "none",
         "memory_noise_mode": run_variables["memory_noise"],
@@ -182,9 +194,49 @@ def parse_steady_results(
         "frames": aggregate.get("frames", 0),
         "drops": aggregate.get("drops", 0),
         "timeouts": aggregate.get("timeouts", 0),
+        "pre_measurement_timeouts": aggregate.get("pre_measurement_timeouts", 0),
+        "measurement_timeouts": aggregate.get("measurement_timeouts", 0),
+        "observed_frames": aggregate.get(
+            "observed_frames", aggregate.get("frames", 0)
+        ),
+        "unique_frames": aggregate.get("unique_frames", aggregate.get("frames", 0)),
+        "duplicate_frames": aggregate.get("duplicate_frames", 0),
+        "sequence_gaps": aggregate.get(
+            "sequence_gaps", aggregate.get("drops", 0)
+        ),
+        "nonadvancing_frames": aggregate.get("nonadvancing_frames", 0),
+        "out_of_order_frames": aggregate.get("out_of_order_frames", 0),
+        "fully_fresh_framesets": aggregate.get("fully_fresh_framesets", 0),
+        "partially_stale_framesets": aggregate.get("partially_stale_framesets", 0),
+        "stale_framesets": aggregate.get("stale_framesets", 0),
+        "freshness_analysis_ms": data.get("postprocess", {}).get(
+            "freshness_analysis_ms", 0.0
+        ),
+        "measurement_mode": data.get("measurement", {}).get(
+            "mode", data.get("run", {}).get("measurement_mode", "deliveries")
+        ),
+        "measurement_requested_duration_ms": data.get("measurement", {}).get(
+            "requested_duration_ms", 0
+        ),
         "measurement_duration_ms": data.get("measurement", {}).get(
             "duration_ms", 0
         ),
+        "transition_noise_gate_enabled": False,
+        "transition_warmup_ready_boottime_ns": 0,
+        "transition_measurement_gate_open_boottime_ns": 0,
+        "transition_warmup_to_gate_ms": 0.0,
+        "deadline_assignments": "[]",
+        "deadline_live_threads": 0,
+        "deadline_profile_entries": 0,
+        "deadline_profile_path": "",
+        "rate_monotonic_assignments": "[]",
+        "rate_monotonic_highest_priority": 0,
+        "rate_monotonic_live_threads": 0,
+        "rate_monotonic_lowest_priority": 0,
+        "rate_monotonic_policy": "",
+        "rate_monotonic_priority_levels": 0,
+        "rate_monotonic_profile_entries": 0,
+        "rate_monotonic_profile_path": "",
         "record_data_dir": str(record_dir),
         "selected_attempt_data_dir": str(selected_dir),
         "artifact_layout": selected.layout,
@@ -204,8 +256,11 @@ def parse_steady_results(
         result,
     )
     flatten("wait_ms", aggregate.get("wait_ms", {}), result)
+    flatten("transition", data.get("transition", {}), result)
     if data.get("deadline") is not None:
         flatten("deadline", data["deadline"], result)
+    if data.get("rate_monotonic") is not None:
+        flatten("rate_monotonic", data["rate_monotonic"], result)
     _add_camera_results(result, data)
     _add_trace_results(result, selected_dir)
     _add_kernel_results(result, selected_dir)

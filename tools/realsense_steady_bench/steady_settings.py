@@ -21,7 +21,13 @@ from realsense_bench_common.settings import (
 
 
 TOOL_DIR = TOOLS_DIR / "realsense_steady_bench"
-POLICY_NAMES = {**BASE_POLICY_NAMES, "deadline": "SCHED_DEADLINE"}
+POLICY_NAMES = {
+    **BASE_POLICY_NAMES,
+    "deadline": "SCHED_DEADLINE",
+    "rr-rm": "SCHED_RR_RM",
+    "fifo-rm": "SCHED_FIFO_RM",
+}
+MODELED_POLICIES = frozenset({"deadline", "rr-rm", "fifo-rm"})
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-steady"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
 NCNN_MODEL_PARAM = (
@@ -39,6 +45,7 @@ FIXED_CAMPAIGN_CONSTANTS = {
     "fixed_usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
     "fixed_cpu_frequency_mhz": CAMPAIGN_CPU_FREQUENCY_MHZ,
     "fixed_drop_caches_before_run": CAMPAIGN_DROP_CACHES_BEFORE_RUN,
+    "fixed_realsense_usb_autosuspend_disabled": True,
     "fixed_rt_priority": CAMPAIGN_RT_PRIORITY,
 }
 

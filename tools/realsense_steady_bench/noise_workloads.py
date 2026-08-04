@@ -108,6 +108,10 @@ class ManagedNoiseProcess:
     def enabled(self) -> bool:
         return any(mode != "none" for mode in self._modes)
 
+    @property
+    def ready_timeout_seconds(self) -> float:
+        return self._ready_timeout_seconds
+
     def validate_environment(self) -> None:
         return None
 
@@ -728,6 +732,16 @@ class NoiseSuite:
     @property
     def gpu_enabled(self) -> bool:
         return self.gpu.enabled
+
+    def any_enabled(self, modes: Mapping[str, str]) -> bool:
+        return any(str(modes[key]) != "none" for key in self.mode_keys)
+
+    def startup_timeout_seconds(self, modes: Mapping[str, str]) -> float:
+        return sum(
+            workload.ready_timeout_seconds
+            for key, workload in self._by_key.items()
+            if str(modes[key]) != "none"
+        )
 
     def build_targets(self) -> List[str]:
         return [

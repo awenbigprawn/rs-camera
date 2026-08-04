@@ -159,6 +159,7 @@ class RealSenseTimerlatBench(Benchmark):
                 rsusb_backend=False,
                 rsusb_usb_devices=(),
                 rsusb_helper=Path("/unused"),
+                disable_realsense_autosuspend=True,
             )
         )
 
@@ -290,8 +291,11 @@ class RealSenseTimerlatBench(Benchmark):
         ]
         return ["sudo", "--non-interactive", *command] if self._use_sudo else command
 
-    def _prepare_attempt(self, attempt_dir: Path, load_case: str) -> None:
+    def _prepare_attempt(
+        self, attempt: int, attempt_dir: Path, load_case: str
+    ) -> None:
         attempt_dir.mkdir(parents=True, exist_ok=False)
+        self._system_controls.prepare_attempt(attempt, attempt_dir)
         if self._drop_caches:
             self._memory_cleanup(
                 build_variables={},
@@ -491,9 +495,9 @@ class RealSenseTimerlatBench(Benchmark):
         camera_enabled = bool(case.get("camera", {}).get("enabled"))
 
         def run_attempt(
-            _attempt: int, attempt_dir: Path
+            attempt: int, attempt_dir: Path
         ) -> tuple[str, Dict[str, Any]]:
-            self._prepare_attempt(attempt_dir, load_case)
+            self._prepare_attempt(attempt, attempt_dir, load_case)
             return self._run_attempt(case=case, attempt_dir=attempt_dir)
 
         def classify(summary: Mapping[str, Any]) -> AttemptDecision:

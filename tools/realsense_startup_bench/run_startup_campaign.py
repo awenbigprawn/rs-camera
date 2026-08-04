@@ -164,6 +164,7 @@ class RealSenseStartupBench(Benchmark):
                 rsusb_unbind_settle_seconds=(
                     self._rsusb_unbind_settle_seconds
                 ),
+                disable_realsense_autosuspend=not self._rsusb_backend,
             )
         )
 

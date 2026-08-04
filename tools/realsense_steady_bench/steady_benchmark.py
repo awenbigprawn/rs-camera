@@ -22,6 +22,7 @@ from noise_workloads import (
     UsbStorageNoiseConfig,
     UsbStorageReadNoise,
 )
+from noise_transition import NoiseTransition
 from parse_steady_trace import parse_steady_trace
 from realsense_bench_common.commands import (
     build_pthread_tracer,
@@ -50,6 +51,7 @@ from steady_settings import (
     CPU_LOCK,
     CPU_RESTORE,
     NCNN_MODEL_PARAM,
+    MODELED_POLICIES,
     POLICY_NAMES,
     REPO_ROOT,
     RSUSB_HELPER,
@@ -112,6 +114,7 @@ class RealSenseSteadyBench(Benchmark):
         self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
         self._build_jobs = build_jobs
+        self._logical_failures: List[str] = []
         self._probe = self._build_dir / "realsense_steady_probe"
         self._reset_probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
@@ -138,6 +141,7 @@ class RealSenseSteadyBench(Benchmark):
                 rsusb_backend=CAMPAIGN_BACKEND == "rsusb",
                 rsusb_usb_devices=CAMPAIGN_RSUSB_USB_DEVICES,
                 rsusb_helper=RSUSB_HELPER,
+                disable_realsense_autosuspend=(CAMPAIGN_BACKEND == "v4l2"),
             )
         )
         vulkan_icd = gpu_noise_vulkan_icd.resolve() if gpu_noise_vulkan_icd else None
@@ -260,7 +264,8 @@ class RealSenseSteadyBench(Benchmark):
         policy: str,
         summary_path: Path,
         events_path: Path,
-        deadline_profile_path: Path | None = None,
+        scheduler_profile_path: Path | None = None,
+        transition_arguments: List[str] | None = None,
     ) -> List[str]:
         command = scheduler_prefix(policy, self._priority)
 
@@ -280,6 +285,7 @@ class RealSenseSteadyBench(Benchmark):
             ("stream_mode", "--stream-mode"),
             ("delivery", "--delivery"),
             ("frames", "--frames"),
+            ("measurement_duration_ms", "--measurement-duration-ms"),
             ("warmup_frames", "--warmup-frames"),
             ("deadline_apply_after_frames", "--deadline-apply-after-frames"),
             ("frame_timeout_ms", "--frame-timeout-ms"),
@@ -294,9 +300,20 @@ class RealSenseSteadyBench(Benchmark):
         for key, flag in fields:
             if key in probe and probe[key] is not None:
                 command += [flag, str(probe[key])]
+        if policy in MODELED_POLICIES:
+            profile = scheduler_profile_path or Path(str(probe["deadline_profile"]))
         if policy == "deadline":
-            profile = deadline_profile_path or Path(str(probe["deadline_profile"]))
             command += ["--deadline-profile", str(profile)]
+        elif policy in {"rr-rm", "fifo-rm"}:
+            command += [
+                "--rate-monotonic-profile",
+                str(profile),
+                "--rate-monotonic-policy",
+                "rr" if policy == "rr-rm" else "fifo",
+                "--rate-monotonic-highest-priority",
+                str(self._priority),
+            ]
+        command += transition_arguments or []
         command += [
             "--summary-output",
             str(summary_path),
@@ -338,6 +355,7 @@ class RealSenseSteadyBench(Benchmark):
         kwargs: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any]]:
         attempt_dir.mkdir(parents=True, exist_ok=False)
+        self._system_controls.prepare_attempt(attempt, attempt_dir)
         self._drop_caches_for_attempt(attempt_dir, case_id, policy, noise_modes)
 
         summary_path = attempt_dir / "steady_summary.json"
@@ -348,25 +366,35 @@ class RealSenseSteadyBench(Benchmark):
         before = attempt_dir / "topology_before.json"
         after = attempt_dir / "topology_after.json"
         self._system_controls.snapshot_topology(before)
+        noise_transition = NoiseTransition(
+            noise_suite=self._noise_suite,
+            modes=noise_modes,
+            record_dir=attempt_dir,
+        )
 
-        deadline_profile_copy = None
-        deadline_profile_sha256 = ""
-        if policy == "deadline":
-            deadline_profile_source = Path(
+        scheduler_profile_copy = None
+        scheduler_profile_sha256 = ""
+        if policy in MODELED_POLICIES:
+            scheduler_profile_source = Path(
                 str(case.get("probe", {})["deadline_profile"])
             ).resolve()
-            deadline_profile_copy = attempt_dir / "deadline_profile.csv"
-            shutil.copy2(deadline_profile_source, deadline_profile_copy)
-            deadline_profile_sha256 = hashlib.sha256(
-                deadline_profile_copy.read_bytes()
+            profile_name = (
+                "deadline_profile.csv"
+                if policy == "deadline"
+                else "rate_monotonic_profile.csv"
+            )
+            scheduler_profile_copy = attempt_dir / profile_name
+            shutil.copy2(scheduler_profile_source, scheduler_profile_copy)
+            scheduler_profile_sha256 = hashlib.sha256(
+                scheduler_profile_copy.read_bytes()
             ).hexdigest()
-            metadata_source = deadline_profile_source.with_suffix(
-                deadline_profile_source.suffix + ".json"
+            metadata_source = scheduler_profile_source.with_suffix(
+                scheduler_profile_source.suffix + ".json"
             )
             if metadata_source.is_file():
                 shutil.copy2(
                     metadata_source,
-                    attempt_dir / "deadline_profile.csv.json",
+                    attempt_dir / f"{profile_name}.json",
                 )
 
         command = traced_command(
@@ -375,7 +403,8 @@ class RealSenseSteadyBench(Benchmark):
                 policy,
                 summary_path,
                 events_path,
-                deadline_profile_path=deadline_profile_copy,
+                scheduler_profile_path=scheduler_profile_copy,
+                transition_arguments=noise_transition.probe_arguments(),
             ),
             tracer=self._tracer,
             lifecycle_path=lifecycle_path,
@@ -390,10 +419,20 @@ class RealSenseSteadyBench(Benchmark):
             "attempt": attempt,
             "command": command,
             "record_data_dir": str(attempt_dir),
-            "deadline_profile_copy": (
-                str(deadline_profile_copy) if deadline_profile_copy else ""
+            "scheduler_profile_copy": (
+                str(scheduler_profile_copy) if scheduler_profile_copy else ""
             ),
-            "deadline_profile_sha256": deadline_profile_sha256,
+            "scheduler_profile_sha256": scheduler_profile_sha256,
+            "deadline_profile_copy": (
+                str(scheduler_profile_copy) if policy == "deadline" else ""
+            ),
+            "deadline_profile_sha256": (
+                scheduler_profile_sha256 if policy == "deadline" else ""
+            ),
+            "noise_after_camera_warmup": noise_transition.enabled,
+            "measurement_gate_timeout_ms": (
+                noise_transition.gate_timeout_ms if noise_transition.enabled else 0
+            ),
         }
         (attempt_dir / "attempt_manifest.json").write_text(
             json.dumps(attempt_manifest, indent=2, sort_keys=True) + "\n",
@@ -409,13 +448,19 @@ class RealSenseSteadyBench(Benchmark):
         probe = case.get("probe", {})
         frames = int(probe.get("frames", 10000))
         fps = int(probe.get("fps", 30))
-        automatic_seconds = frames / max(1, fps) * 2 + 90
-        measurement_timeout = int(probe.get("measurement_timeout_ms", 0)) / 1000
-        timeout = max(int(automatic_seconds), int(measurement_timeout + 60))
+        measurement_duration = int(probe.get("measurement_duration_ms", 0)) / 1000
+        if measurement_duration > 0:
+            timeout = int(measurement_duration + 90)
+        else:
+            automatic_seconds = frames / max(1, fps) * 2 + 90
+            measurement_timeout = int(probe.get("measurement_timeout_ms", 0)) / 1000
+            timeout = max(int(automatic_seconds), int(measurement_timeout + 60))
+        if noise_transition.enabled:
+            timeout += int(noise_transition.gate_timeout_ms / 1000) + 5
         kernel_before, kernel_error = self._system_controls.kernel_log()
         output = ""
         try:
-            self._noise_suite.start_all(noise_modes, attempt_dir)
+            noise_transition.start()
             output = self.run_bench_command(
                 run_command=command,
                 wrapped_run_command=wrapped_command,
@@ -428,6 +473,7 @@ class RealSenseSteadyBench(Benchmark):
             )
             stdout_path.write_text(output, encoding="utf-8")
         finally:
+            noise_transition.finish()
             self._noise_suite.stop_all(attempt_dir)
             self._system_controls.capture_kernel_delta(
                 attempt_dir, kernel_before, kernel_error
@@ -503,6 +549,9 @@ class RealSenseSteadyBench(Benchmark):
             ),
             "backend": self._system_controls.backend_name,
             "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
+            "realsense_usb_autosuspend_disabled": (
+                self._system_controls.config.disable_realsense_autosuspend
+            ),
             "lime_enabled": self._use_lime,
             "cpu_frequency_mhz": self._system_controls.config.cpu_frequency_mhz,
             "drop_caches_before_attempt": self._drop_caches_before_run,
@@ -519,6 +568,14 @@ class RealSenseSteadyBench(Benchmark):
                 str(case.get("probe", {}).get("deadline_profile", ""))
                 if policy == "deadline"
                 else ""
+            ),
+            "scheduler_profile_source": (
+                str(case.get("probe", {}).get("deadline_profile", ""))
+                if policy in MODELED_POLICIES
+                else ""
+            ),
+            "rate_monotonic_highest_priority": (
+                self._priority if policy in {"rr-rm", "fifo-rm"} else 0
             ),
         }
         (record_dir / "run_manifest.json").write_text(
@@ -562,7 +619,7 @@ class RealSenseSteadyBench(Benchmark):
     ) -> Dict[str, Any]:
         del command_output, build_variables, benchmark_duration_seconds
         record_dir = Path(record_data_dir).resolve()
-        return parse_steady_results(
+        result = parse_steady_results(
             record_dir=record_dir,
             case=self._cases[run_variables["case_id"]],
             run_variables=run_variables,
@@ -571,6 +628,26 @@ class RealSenseSteadyBench(Benchmark):
             drop_caches_configured=self._drop_caches_before_run,
             noise_suite=self._noise_suite,
         )
+        if not bool(result.get("success", False)):
+            self._logical_failures.append(
+                f"{run_variables['case_id']}/{run_variables['policy']}/"
+                f"cpu={run_variables['cpu_noise']}/"
+                f"memory={run_variables['memory_noise']}/"
+                f"gpu={run_variables['gpu_noise']}/"
+                f"usb={run_variables['usb_storage_noise']}: "
+                f"{result.get('error', 'unknown error')}"
+            )
+        return result
+
+    def assert_all_runs_successful(self) -> None:
+        if self._logical_failures:
+            preview = " | ".join(self._logical_failures[:5])
+            if len(self._logical_failures) > 5:
+                preview += f" | ... {len(self._logical_failures) - 5} more"
+            raise RuntimeError(
+                f"{len(self._logical_failures)} logical benchmark run(s) failed: "
+                + preview
+            )
 
     def cleanup(self) -> None:
         """Stop any surviving workloads and restore host-wide controls."""

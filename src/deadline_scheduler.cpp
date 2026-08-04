@@ -8,6 +8,7 @@
 #include <fstream>
 #include <map>
 #include <sched.h>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <sys/syscall.h>
@@ -98,11 +99,11 @@ std::vector<profile_entry> load_profile(const std::string &path)
 {
     std::ifstream input(path);
     if (!input)
-        throw std::runtime_error("Cannot open SCHED_DEADLINE profile: " + path);
+        throw std::runtime_error("Cannot open scheduler model profile: " + path);
 
     std::string line;
     if (!std::getline(input, line))
-        throw std::runtime_error("Empty SCHED_DEADLINE profile: " + path);
+        throw std::runtime_error("Empty scheduler model profile: " + path);
     if (!line.empty() && line.back() == '\r')
         line.pop_back();
     const auto header = split_csv(line);
@@ -110,7 +111,7 @@ std::vector<profile_entry> load_profile(const std::string &path)
         "signature", "instance", "name", "runtime_ns", "deadline_ns", "period_ns"};
     if (header != expected)
         throw std::runtime_error(
-            "SCHED_DEADLINE profile header must be: signature,instance,name,"
+            "Scheduler model profile header must be: signature,instance,name,"
             "runtime_ns,deadline_ns,period_ns");
 
     std::vector<profile_entry> entries;
@@ -136,19 +137,19 @@ std::vector<profile_entry> load_profile(const std::string &path)
         entry.period_ns = parse_u64(fields[5], "period_ns", line_number);
         if (entry.signature.empty() || entry.instance == 0 || entry.runtime_ns == 0 ||
             entry.runtime_ns > entry.deadline_ns || entry.deadline_ns > entry.period_ns)
-            throw std::runtime_error("Invalid SCHED_DEADLINE parameters at profile line " +
+            throw std::runtime_error("Invalid scheduler model parameters at profile line " +
                                      std::to_string(line_number));
         const auto key = std::make_pair(entry.signature, entry.instance);
         if (std::any_of(entries.begin(), entries.end(), [&](const auto &existing) {
                 return std::make_pair(existing.signature, existing.instance) == key;
             }))
             throw std::runtime_error(
-                "Duplicate SCHED_DEADLINE profile identity at line " +
+                "Duplicate scheduler model profile identity at line " +
                 std::to_string(line_number));
         entries.push_back(std::move(entry));
     }
     if (entries.empty())
-        throw std::runtime_error("SCHED_DEADLINE profile has no thread entries");
+        throw std::runtime_error("Scheduler model profile has no thread entries");
     return entries;
 }
 
@@ -159,7 +160,7 @@ std::vector<rs_thread_trace_info> snapshot_threads()
         reinterpret_cast<snapshot_fn>(dlsym(RTLD_DEFAULT, "rs_thread_trace_snapshot"));
     if (!snapshot)
         throw std::runtime_error(
-            "SCHED_DEADLINE requires libtrace_pthreads.so in LD_PRELOAD");
+            "Modeled scheduling requires libtrace_pthreads.so in LD_PRELOAD");
 
     const size_t count = snapshot(nullptr, 0);
     std::vector<rs_thread_trace_info> records(count);
@@ -168,7 +169,7 @@ std::vector<rs_thread_trace_info> snapshot_threads()
     const size_t second_count = snapshot(records.data(), records.size());
     if (second_count > records.size())
         throw std::runtime_error(
-            "Thread set changed while applying SCHED_DEADLINE profile");
+            "Thread set changed while applying scheduler model profile");
     records.resize(second_count);
 
     std::sort(records.begin(), records.end(), [](const auto &left, const auto &right) {
@@ -206,6 +207,26 @@ void restore_other(const std::vector<deadline_assignment> &assignments)
         attributes.sched_policy = SCHED_OTHER;
         set_attributes(assignment.tid, attributes);
     }
+}
+
+void restore_other(const std::vector<rate_monotonic_assignment> &assignments)
+{
+    for (const auto &assignment : assignments)
+    {
+        if (!assignment.applied)
+            continue;
+        sched_param parameter{};
+        sched_setscheduler(assignment.tid, SCHED_OTHER, &parameter);
+    }
+}
+
+std::string fixed_policy_name(int policy)
+{
+    if (policy == SCHED_RR)
+        return "SCHED_RR";
+    if (policy == SCHED_FIFO)
+        return "SCHED_FIFO";
+    throw std::runtime_error("Rate-monotonic policy must be SCHED_RR or SCHED_FIFO");
 }
 
 std::string escape_json(const std::string &value)
@@ -306,6 +327,130 @@ std::string deadline_application_json(const deadline_application &result)
                << "\",\"runtime_ns\":" << entry.runtime_ns
                << ",\"deadline_ns\":" << entry.deadline_ns
                << ",\"period_ns\":" << entry.period_ns
+               << ",\"applied\":" << (entry.applied ? "true" : "false")
+               << ",\"errno\":" << entry.error_number << "}";
+    }
+    output << "]}";
+    return output.str();
+}
+
+rate_monotonic_application apply_rate_monotonic_profile(const std::string &path,
+                                                        int policy,
+                                                        int highest_priority)
+{
+    const std::string policy_name = fixed_policy_name(policy);
+    const int minimum_priority = sched_get_priority_min(policy);
+    const int maximum_priority = sched_get_priority_max(policy);
+    if (minimum_priority < 0 || maximum_priority < 0)
+        throw std::runtime_error("Cannot query fixed-priority scheduler range");
+    if (highest_priority < minimum_priority || highest_priority > maximum_priority)
+        throw std::runtime_error(
+            "Rate-monotonic highest priority is outside the scheduler range");
+
+    const auto profile = load_profile(path);
+    const auto threads = snapshot_threads();
+    rate_monotonic_application result;
+    result.profile_path = path;
+    result.policy = policy_name;
+    result.highest_priority = highest_priority;
+    result.profile_entries = profile.size();
+    result.live_threads = threads.size();
+
+    std::map<std::string, unsigned int> instance_counts;
+    std::map<std::pair<std::string, unsigned int>, const rs_thread_trace_info *> live;
+    for (const auto &thread : threads)
+    {
+        const std::string signature(thread.signature);
+        const unsigned int instance = ++instance_counts[signature];
+        live.emplace(std::make_pair(signature, instance), &thread);
+    }
+    if (live.size() != profile.size())
+        throw std::runtime_error(
+            "Rate-monotonic profile/live-thread count mismatch: profile=" +
+            std::to_string(profile.size()) + ", live=" + std::to_string(live.size()));
+
+    std::set<uint64_t> unique_periods;
+    for (const auto &entry : profile)
+        unique_periods.insert(entry.period_ns);
+    result.priority_levels = unique_periods.size();
+    result.lowest_priority =
+        highest_priority - static_cast<int>(result.priority_levels) + 1;
+    if (result.lowest_priority < minimum_priority)
+        throw std::runtime_error(
+            "Rate-monotonic profile needs " +
+            std::to_string(result.priority_levels) +
+            " distinct priorities, but the requested priority band is too small");
+
+    std::map<uint64_t, int> priorities;
+    int priority = highest_priority;
+    // Linux fixed-priority classes use larger numeric values for higher
+    // priorities. Equal modeled periods intentionally share one priority.
+    for (const uint64_t period : unique_periods)
+        priorities.emplace(period, priority--);
+
+    for (const auto &entry : profile)
+    {
+        const auto key = std::make_pair(entry.signature, entry.instance);
+        const auto match = live.find(key);
+        if (match == live.end())
+            throw std::runtime_error(
+                "No live thread matches rate-monotonic profile entry instance " +
+                std::to_string(entry.instance) + " with signature " + entry.signature);
+        rate_monotonic_assignment assignment;
+        assignment.tid = match->second->tid;
+        assignment.signature = entry.signature;
+        assignment.instance = entry.instance;
+        assignment.name = entry.name;
+        assignment.period_ns = entry.period_ns;
+        assignment.priority = priorities.at(entry.period_ns);
+        result.assignments.push_back(std::move(assignment));
+    }
+
+    for (auto &assignment : result.assignments)
+    {
+        sched_param parameter{};
+        parameter.sched_priority = assignment.priority;
+        if (sched_setscheduler(assignment.tid, policy, &parameter) == 0)
+            assignment.error_number = 0;
+        else
+            assignment.error_number = errno;
+        assignment.applied = assignment.error_number == 0;
+        if (!assignment.applied)
+        {
+            const std::string message =
+                "sched_setscheduler(" + policy_name + ") failed for TID " +
+                std::to_string(assignment.tid) + ": " +
+                std::strerror(assignment.error_number);
+            restore_other(result.assignments);
+            throw std::runtime_error(message);
+        }
+    }
+    return result;
+}
+
+std::string rate_monotonic_application_json(
+    const rate_monotonic_application &result)
+{
+    std::ostringstream output;
+    output << "{\"profile_path\":\"" << escape_json(result.profile_path)
+           << "\",\"policy\":\"" << escape_json(result.policy)
+           << "\",\"highest_priority\":" << result.highest_priority
+           << ",\"lowest_priority\":" << result.lowest_priority
+           << ",\"priority_levels\":" << result.priority_levels
+           << ",\"profile_entries\":" << result.profile_entries
+           << ",\"live_threads\":" << result.live_threads
+           << ",\"assignments\":[";
+    for (size_t index = 0; index < result.assignments.size(); ++index)
+    {
+        if (index)
+            output << ",";
+        const auto &entry = result.assignments[index];
+        output << "{\"tid\":" << entry.tid
+               << ",\"signature\":\"" << escape_json(entry.signature)
+               << "\",\"instance\":" << entry.instance
+               << ",\"name\":\"" << escape_json(entry.name)
+               << "\",\"period_ns\":" << entry.period_ns
+               << ",\"priority\":" << entry.priority
                << ",\"applied\":" << (entry.applied ? "true" : "false")
                << ",\"errno\":" << entry.error_number << "}";
     }

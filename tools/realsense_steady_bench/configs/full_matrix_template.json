@@ -21,6 +21,7 @@
         "stream_mode": "d435_all",
         "delivery": "wait",
         "frames": 18000,
+        "measurement_duration_ms": 600000,
         "warmup_frames": 60,
         "frame_timeout_ms": 1500,
         "startup_timeout_ms": 15000,

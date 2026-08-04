@@ -33,7 +33,7 @@ class ParameterExplorationConfigTests(unittest.TestCase):
         for case in self.cases.values():
             probe = case["probe"]
             self.assertEqual(probe["warmup_frames"] / probe["fps"], 10)
-            self.assertEqual(probe["frames"] / probe["fps"], 300)
+            self.assertEqual(probe["measurement_duration_ms"], 300000)
             self.assertEqual(case["workload"]["measurement_seconds"], 300)
 
     def test_representative_profiles(self) -> None:

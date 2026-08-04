@@ -101,8 +101,8 @@ enabled in both kernel variants.
 ```text
 scheduling_policy:
   SCHED_OTHER
-  SCHED_RR
-  SCHED_FIFO
+  SCHED_RR (rate-monotonic per-thread priorities)
+  SCHED_FIFO (rate-monotonic per-thread priorities)
   SCHED_DEADLINE
 ```
 
@@ -113,11 +113,17 @@ SCHED_OTHER:
   nice: 0
 
 SCHED_RR:
-  priority: 80
+  mode: process starts under SCHED_OTHER; worker priorities applied during warm-up
+  highest worker priority: 80
+  ordering: shorter modeled period receives higher priority
+  tie: workers with equal modeled periods receive equal priority
   rr_timeslice: record from the running kernel
 
 SCHED_FIFO:
-  priority: 80
+  mode: process starts under SCHED_OTHER; worker priorities applied during warm-up
+  highest worker priority: 80
+  ordering: shorter modeled period receives higher priority
+  tie: workers with equal modeled periods receive equal priority
 
 SCHED_DEADLINE:
   assignment: per stable librealsense thread
@@ -407,18 +413,24 @@ At 30 frames/s:
 
 ```text
 warm-up deliveries per camera: 300
-measured deliveries per camera: 18000
+measurement duration: 600000 ms
+nominal deliveries per healthy camera: about 18000
 ```
 
 At 60 frames/s:
 
 ```text
 warm-up deliveries per camera: 600
-measured deliveries per camera: 36000
+measurement duration: 600000 ms
+nominal deliveries per healthy camera: about 36000
 ```
 
 The measurement begins only after every camera has completed its warm-up.
-It ends after every camera has reached the requested measured delivery count.
+It ends at a fixed wall-clock deadline shared by every camera. A frame timeout
+during warm-up or the noise transition fails the attempt and permits full-reset
+recovery. A timeout after `steady_state_begin` is counted as a measured outcome,
+and acquisition continues until the deadline. This prevents overloaded cases
+from receiving longer observation windows than healthy cases.
 
 ### 6.4 Extreme long steady-state phase
 

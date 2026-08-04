@@ -64,6 +64,38 @@ The campaign combines these data with:
 Raw frame events and tracing output are retained so paper figures can be
 regenerated without rerunning the hardware experiment.
 
+### Freshness and loss metrics
+
+One return from `wait_for_frames()` is not necessarily one new camera
+frameset. Under severe contention, librealsense can aggregate newly arrived
+streams with cached frames from other streams, and the application can observe
+the same frame number more than once. The legacy `frames`, `deliveries`, and
+`drops` fields are retained for compatibility, but formal loss analysis uses
+the following post-processed fields:
+
+- `observed_frames`: all frame objects returned during measurement;
+- `unique_frames`: distinct frame numbers per camera and stream;
+- `duplicate_frames`: observations whose camera/stream/frame-number identity
+  was already present in the measurement;
+- `sequence_gaps`: missing frame numbers inside each stream's observed
+  `[minimum, maximum]` range;
+- `nonadvancing_frames`: observations whose frame number did not advance past
+  that stream's previous high-water mark;
+- `out_of_order_frames`: observations below the stream's previous high-water
+  mark;
+- `fully_fresh_framesets`: every child stream advanced;
+- `partially_stale_framesets`: at least one child stream advanced and at least
+  one did not; and
+- `stale_framesets`: no child stream advanced.
+
+These values are computed after `steady_state_end` from the raw events already
+retained by the probe. No set lookup, sorting, or uniqueness analysis is added
+to the measured `wait_for_frames()` path. `freshness_analysis_ms` records the
+extra post-processing time, and `freshness_analysis_begin/end` trace markers
+make that teardown work identifiable. The temporary analysis storage is one
+64-bit frame-number vector per stream and is released when the summary has
+been written.
+
 ## Probe Modes
 
 `--delivery wait` gives every camera an explicitly named `rs-wait-N` acquisition
@@ -79,6 +111,13 @@ Stream modes are:
 
 The default D435 all-stream profile is depth/IR at 848x480 and RGB at 640x480,
 all at 30 frames/s.
+
+Formal steady-state cases use a fixed wall-clock measurement duration. The
+legacy `--frames` stop condition remains available for short functional tests,
+but it must not be used to compare overloaded workloads: delayed deliveries
+would otherwise make a nominal ten-minute run last longer. Use
+`--measurement-duration-seconds` for a command-line override, or set
+`probe.measurement_duration_ms` in a case configuration.
 
 ## Build
 
@@ -132,6 +171,23 @@ The C++ probe uses a global warm-up barrier. It emits `steady_state_begin` and
 starts the measured interval only after every selected camera has delivered its
 configured number of warm-up frames. For two cameras, one healthy camera cannot
 start the measurement while the other reports `Frame didn't arrive`.
+
+When any noise condition is enabled, the runner uses a second barrier. The
+probe first starts and warms every camera with no noise process running. It then
+publishes `camera_warmup_ready`; the runner starts and warms the selected noise
+workers, and finally publishes `measurement_start_gate`. Camera acquisition
+continues while this gate is closed, but those deliveries are deliberately not
+included in the formal measurement. Therefore memory pressure cannot prevent
+USB enumeration or initial pipeline warm-up, and noise warm-up is also excluded
+from the measured interval. The transition timestamps are recorded in
+`noise_transition.json` and in the `transition_*` result columns.
+
+Before measurement begins, a `wait_for_frames()` timeout is a startup or noise
+transition failure and remains eligible for full-reset recovery. During a
+fixed-duration measurement, the same timeout is counted and acquisition
+continues until the wall-clock deadline. It therefore remains visible as a
+performance failure without changing the duration or replacing the measured
+run with a later retry.
 
 Full-reset recovery is enabled by default. If an attempt fails before
 `steady_state_begin`, the runner:
@@ -237,6 +293,50 @@ stream configuration, number of cameras, or delivery mode. First collect new
 SCHED_OTHER traces. For paper results, pool the planned independent calibration
 traces rather than deriving a profile from a single trace.
 
+## Per-thread rate-monotonic RR and FIFO modes
+
+The `rr-rm` and `fifo-rm` policies reuse the same workload-specific temporal
+model as SCHED_DEADLINE, but use only its measured `period_ns` values. The
+process and every worker initially run under SCHED_OTHER. During camera warm-up,
+the probe strictly matches every live worker by creation-stack signature and
+instance number, then assigns fixed priorities according to rate-monotonic
+ordering:
+
+~~~text
+shorter period  -> higher numeric POSIX real-time priority
+equal period    -> equal priority
+longer period   -> lower priority
+~~~
+
+The shortest-period group receives the campaign RT priority (80 by default),
+and each distinct longer period uses the next lower priority. The process main
+thread remains SCHED_OTHER because it performs aperiodic phase coordination;
+the application `rs-wait-N` acquisition threads are included in the generated
+worker model. `rr-rm` uses SCHED_RR within each equal-priority group, whereas
+`fifo-rm` uses SCHED_FIFO. Profile matching and policy application are
+all-or-nothing: a mismatch or failed `sched_setscheduler()` call restores every
+already changed worker to SCHED_OTHER and invalidates the run before
+measurement.
+
+For example:
+
+~~~sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config MATCHING_CONFIG.json \
+  --case MATCHING_CASE \
+  --policies rr-rm fifo-rm \
+  --scheduler-profile tools/realsense_steady_bench/profiles/WORKLOAD.csv \
+  --nb-runs 3 \
+  --serial CAMERA_A --serial CAMERA_B \
+  --results-dir tools/realsense_steady_bench/results/rate_monotonic
+~~~
+
+The output distinguishes these policies as `SCHED_RR_RM` and
+`SCHED_FIFO_RM`. Each row records the exact TID-to-period-to-priority mapping,
+the number of priority levels, and the copied profile digest. The historical
+`rr` and `fifo` modes remain available and continue to launch the entire
+process at one flat priority; do not merge their results with the RM modes.
+
 ## Long Single-Camera Run
 
 For a ten-minute, 30-frame/s acquisition:
@@ -245,7 +345,7 @@ For a ten-minute, 30-frame/s acquisition:
 .venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
   --case one_camera_all_streams_wait \
   --policies other \
-  --frames 18000 \
+  --measurement-duration-seconds 600 \
   --nb-runs 5 \
   --serial CAMERA_SERIAL \
   --results-dir tools/realsense_steady_bench/results/one_camera_10min
@@ -327,7 +427,8 @@ This creates 24 runs:
 2 workloads x 2 policies x 2 CPU-noise modes x 3 repetitions
 ```
 
-The workload warms up for ten seconds before camera startup. Each record reports
+The workload starts after all cameras have warmed and then warms for ten seconds
+before steady-state measurement. Each record reports
 aggregate process CPU time, CPU equivalents (`process CPU time / wall time`),
 normalized worker utilization, completed register-loop iterations, start/stop
 timestamps, worker count, and affinity. Optional timing controls are
@@ -371,7 +472,8 @@ This creates 24 runs:
 2 workloads x 2 policies x 2 memory-noise modes x 3 repetitions
 ```
 
-The runner waits for ten seconds of copy progress before camera startup. Each
+After all cameras have warmed, the runner waits for ten seconds of copy progress
+before opening the steady-state measurement gate. Each
 record contains payload-copy MiB/s, an estimated read-plus-write memory traffic
 rate, allocated bytes, buffer size, worker count, CPU equivalents, affinity,
 and `CLOCK_BOOTTIME` boundaries. The read-plus-write rate is an algorithmic
@@ -434,9 +536,9 @@ run independent of external model downloads while preserving the exact
 MobileNetV2 layer graph and GPU command stream used during candidate selection.
 The ncnn git revision and SHA-256 of `mobilenet_v2.param` identify the workload.
 
-Before each camera run, the runner starts one `SCHED_OTHER` noise process and
-waits for model loading plus ten warm-up inferences. Only after
-`gpu_noise_ready.json` exists does camera startup begin. At the end of the run,
+After every camera has warmed, the runner starts one `SCHED_OTHER` noise process
+and waits for model loading plus ten warm-up inferences. Only after
+`gpu_noise_ready.json` exists does steady-state measurement begin. At the end of the run,
 the process handles `SIGTERM`, completes its in-flight inference, and writes
 latency and iteration statistics. A software Vulkan CPU device is rejected, so
 llvmpipe cannot silently turn this into CPU noise. On Raspberry Pi, the runner

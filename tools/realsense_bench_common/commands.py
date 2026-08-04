@@ -16,9 +16,9 @@ def scheduler_prefix(policy: str, priority: int) -> List[str]:
         return ["chrt", "--rr", str(priority)]
     if policy == "fifo":
         return ["chrt", "--fifo", str(priority)]
-    if policy == "deadline":
-        # Individual worker reservations are installed by the steady probe
-        # after camera warm-up. The process must start as SCHED_OTHER.
+    if policy in {"deadline", "rr-rm", "fifo-rm"}:
+        # Individual worker reservations/priorities are installed by the
+        # steady probe after camera warm-up. The main thread remains OTHER.
         return ["chrt", "--other", "0"]
     raise ValueError(f"Unsupported policy: {policy}")
 

@@ -40,17 +40,25 @@ def _classify_attempt(summary: Mapping[str, Any]) -> AttemptDecision:
     error = str(summary.get("error", ""))
     if success:
         phase = "none"
-    elif error.startswith("SCHED_DEADLINE setup failed:"):
+    elif error.startswith((
+        "SCHED_DEADLINE setup failed:",
+        "Rate-monotonic setup failed:",
+    )):
         phase = "scheduler_setup"
+    elif error.startswith("Noise setup failed:"):
+        phase = "noise_setup"
+    elif error.startswith("Noise transition frame failure:"):
+        phase = "noise_transition"
     elif has_measurement_started:
         phase = "measurement"
     else:
         phase = "startup"
+    retryable_phases = {"startup", "noise_transition", "measurement"}
     return AttemptDecision(
         success=success,
         failure_phase=phase,
-        retry=not success and phase == "startup",
-        recover=not success and phase != "scheduler_setup",
+        retry=not success and phase in retryable_phases,
+        recover=not success and phase in retryable_phases,
         error=error,
         metadata={"measurement_started": has_measurement_started},
     )

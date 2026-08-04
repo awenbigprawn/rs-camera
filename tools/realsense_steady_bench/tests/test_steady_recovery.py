@@ -25,10 +25,16 @@ from steady_benchmark import RealSenseSteadyBench  # noqa: E402
 
 class _SystemControls:
     backend_name = "V4L2"
-    config = SimpleNamespace(cpu_frequency_mhz=1500)
+    config = SimpleNamespace(
+        cpu_frequency_mhz=1500,
+        disable_realsense_autosuspend=True,
+    )
 
     def prepare_campaign(self, record_dir):
         del record_dir
+
+    def prepare_attempt(self, attempt, attempt_dir):
+        del attempt, attempt_dir
 
 
 class _NoiseSuite:
@@ -218,7 +224,41 @@ class SteadyRunRetryTest(unittest.TestCase):
                 summary["attempts"][0]["failure_phase"], "scheduler_setup"
             )
 
-    def test_measurement_failure_is_reset_but_not_retried(self):
+    def test_rate_monotonic_setup_failure_is_not_reset_or_retried(self):
+        bench = _FakeSteadyBench(
+            [
+                _summary(
+                    success=False,
+                    measurement_start=0,
+                    error="Rate-monotonic setup failed: profile mismatch",
+                ),
+                _summary(success=True, measurement_start=223456),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            bench.single_run(
+                case_id="two-camera",
+                policy="rr-rm",
+                cpu_noise="none",
+                memory_noise="none",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+            summary = json.loads(
+                (record_dir / "steady_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(bench._recovery.calls, [])
+            self.assertEqual(summary["attempt_count"], 1)
+            self.assertFalse(summary["eventual_success"])
+            self.assertEqual(
+                summary["attempts"][0]["failure_phase"], "scheduler_setup"
+            )
+
+    def test_measurement_failure_is_reset_and_retried(self):
         bench = _FakeSteadyBench(
             [
                 _summary(
@@ -246,9 +286,78 @@ class SteadyRunRetryTest(unittest.TestCase):
             )
 
             self.assertEqual(len(bench._recovery.calls), 1)
+            self.assertEqual(summary["attempt_count"], 2)
+            self.assertTrue(summary["eventual_success"])
+            self.assertEqual(summary["attempts"][0]["failure_phase"], "measurement")
+
+    def test_noise_setup_failure_is_not_reset_or_retried(self):
+        bench = _FakeSteadyBench(
+            [
+                _summary(
+                    success=False,
+                    measurement_start=0,
+                    error="Noise setup failed: memory noise exited before ready",
+                ),
+                _summary(success=True, measurement_start=223456),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            bench.single_run(
+                case_id="two-camera",
+                policy="other",
+                cpu_noise="none",
+                memory_noise="fixed_copy",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+            summary = json.loads(
+                (record_dir / "steady_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(bench._recovery.calls, [])
             self.assertEqual(summary["attempt_count"], 1)
             self.assertFalse(summary["eventual_success"])
-            self.assertEqual(summary["attempts"][0]["failure_phase"], "measurement")
+            self.assertEqual(summary["attempts"][0]["failure_phase"], "noise_setup")
+
+    def test_frame_failure_during_noise_transition_is_reset_and_retried(self):
+        bench = _FakeSteadyBench(
+            [
+                _summary(
+                    success=False,
+                    measurement_start=0,
+                    error=(
+                        "Noise transition frame failure: camera-b: "
+                        "Frame didn't arrive within 1500"
+                    ),
+                ),
+                _summary(success=True, measurement_start=223456),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            bench.single_run(
+                case_id="two-camera",
+                policy="other",
+                cpu_noise="none",
+                memory_noise="fixed_copy",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+            summary = json.loads(
+                (record_dir / "steady_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(len(bench._recovery.calls), 1)
+            self.assertEqual(summary["attempt_count"], 2)
+            self.assertTrue(summary["eventual_success"])
+            self.assertEqual(
+                summary["attempts"][0]["failure_phase"], "noise_transition"
+            )
 
 
 class MultiCameraFullResetTest(unittest.TestCase):

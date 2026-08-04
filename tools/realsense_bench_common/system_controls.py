@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
 NO_TURBO_PATH = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
 THERMAL_ZONE0 = Path("/sys/class/thermal/thermal_zone0/temp")
+USB_SYSFS_BASE = Path("/sys/bus/usb/devices")
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,8 @@ class SystemControlConfig:
     rsusb_prepare_each_attempt: bool = False
     rsusb_prepare_timeout_seconds: float = 10.0
     rsusb_unbind_settle_seconds: float = 0.25
+    disable_realsense_autosuspend: bool = False
+    usb_sysfs_base: Path = USB_SYSFS_BASE
 
 
 class SystemControls:
@@ -139,18 +142,28 @@ class SystemControls:
         cpu_state = self._lock_cpu_once(record_dir)
         if not self.config.rsusb_prepare_each_attempt:
             self._prepare_rsusb_once()
+        if self.config.disable_realsense_autosuspend:
+            self._enforce_realsense_autosuspend(
+                record_dir / "realsense_autosuspend_campaign.json"
+            )
         return cpu_state
 
-    def prepare_attempt(self, _attempt: int, _attempt_dir: Path) -> None:
-        if not self.config.rsusb_backend:
-            return
-        if self.config.rsusb_prepare_each_attempt:
-            self._run_rsusb_helper("unbind")
-            self._rsusb_unbound = True
-            if self.config.rsusb_unbind_settle_seconds > 0:
-                time.sleep(self.config.rsusb_unbind_settle_seconds)
-        else:
-            self._prepare_rsusb_once()
+    def prepare_attempt(self, attempt: int, attempt_dir: Path) -> None:
+        if self.config.rsusb_backend:
+            if self.config.rsusb_prepare_each_attempt:
+                self._run_rsusb_helper("unbind")
+                self._rsusb_unbound = True
+                if self.config.rsusb_unbind_settle_seconds > 0:
+                    time.sleep(self.config.rsusb_unbind_settle_seconds)
+            else:
+                self._prepare_rsusb_once()
+        if self.config.disable_realsense_autosuspend:
+            output = (
+                attempt_dir / "realsense_autosuspend.json"
+                if attempt_dir.is_dir()
+                else None
+            )
+            self._enforce_realsense_autosuspend(output, attempt=attempt)
 
     def _lock_cpu_once(self, record_dir: Path) -> Dict[str, Any]:
         frequency_mhz = self.config.cpu_frequency_mhz
@@ -235,7 +248,81 @@ class SystemControls:
         )
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
-            raise RuntimeError(f"Failed to restore {path}={value}: {detail}")
+            raise RuntimeError(f"Failed to write {path}={value}: {detail}")
+
+    def realsense_usb_power_state(self) -> List[Dict[str, str]]:
+        devices: List[Dict[str, str]] = []
+        for device_dir in sorted(self.config.usb_sysfs_base.glob("*")):
+            if not device_dir.is_dir():
+                continue
+            vendor = self._read_optional_text(device_dir / "idVendor").lower()
+            product = self._read_optional_text(device_dir / "idProduct").lower()
+            if vendor != "8086" or product != "0b07":
+                continue
+            control = device_dir / "power" / "control"
+            devices.append(
+                {
+                    "usb_device": device_dir.name,
+                    "sysfs_path": str(device_dir),
+                    "vendor": vendor,
+                    "product": product,
+                    "serial": self._read_optional_text(device_dir / "serial"),
+                    "power_control_path": str(control),
+                    "power_control": self._read_optional_text(control),
+                }
+            )
+        return devices
+
+    def _enforce_realsense_autosuspend(
+        self,
+        output: Path | None,
+        *,
+        attempt: int | None = None,
+    ) -> List[Dict[str, str]]:
+        devices = self.realsense_usb_power_state()
+        if not devices:
+            raise RuntimeError(
+                "No connected Intel RealSense D435 USB device (8086:0b07) was found"
+            )
+        for device in devices:
+            control = Path(device["power_control_path"])
+            if not control.is_file():
+                raise RuntimeError(
+                    f"RealSense power control is unavailable: {control}"
+                )
+            if device["power_control"] != "on":
+                self._write_sysfs_value(control, "on")
+
+        verified = self.realsense_usb_power_state()
+        errors = [
+            f"{device['usb_device']}={device['power_control'] or 'unreadable'}"
+            for device in verified
+            if device["power_control"] != "on"
+        ]
+        if errors:
+            raise RuntimeError(
+                "RealSense USB autosuspend disable verification failed: "
+                + ", ".join(errors)
+            )
+        if output is not None:
+            output.write_text(
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "attempt": attempt,
+                        "devices": verified,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        print(
+            "[USB-POWER] autosuspend disabled for "
+            f"{len(verified)} connected D435 device(s)"
+        )
+        return verified
 
     def restore_cpu_frequency(self) -> None:
         if not self._cpu_restore_needed:
