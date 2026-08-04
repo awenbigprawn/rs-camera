@@ -171,6 +171,44 @@ class DeadlineProfileModelTest(unittest.TestCase):
         self.assertEqual(saved_metadata["runtime_margin"], 1.20)
         self.assertEqual(saved_metadata["period_scale"], 0.91)
 
+    def test_profile_can_exclude_workers_above_modeled_period_limit(self):
+        fast = ("entry=fast@0x1", 1)
+        slow = ("entry=slow@0x2", 1)
+        threads = {
+            fast: {
+                "name": "fast",
+                "execution_ns": 1_000_000,
+                "period_ns": 20_000_000,
+            },
+            slow: {
+                "name": "slow",
+                "execution_ns": 100_000,
+                "period_ns": 5_000_000_000,
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "generate_deadline_profile._trace_threads",
+            return_value=(threads, {"input": "one"}),
+        ):
+            output = Path(directory) / "profile.csv"
+            metadata = generate_profile(
+                trace_runs=[Path("one")],
+                output=output,
+                runtime_margin=1.20,
+                period_scale=0.91,
+                minimum_runtime_us=100,
+                maximum_period_us=4_194_304,
+                maximum_modeled_period_us=1_000_000,
+            )
+            with output.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual([row["signature"] for row in rows], [fast[0]])
+        self.assertEqual(metadata["source_thread_count"], 2)
+        self.assertEqual(metadata["thread_count"], 1)
+        self.assertEqual(metadata["excluded_thread_count"], 1)
+        self.assertEqual(metadata["excluded_threads"][0]["signature"], slow[0])
+
     def test_deadline_policy_starts_process_as_sched_other(self):
         self.assertEqual(scheduler_prefix("deadline", 80), ["chrt", "--other", "0"])
 

@@ -10,6 +10,11 @@ import sys
 import time
 from typing import Any, Dict, List
 
+from realsense_bench_common.cpu_isolation import (
+    CpuIsolation,
+    CpuIsolationConfig,
+)
+
 
 CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
 NO_TURBO_PATH = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
@@ -33,6 +38,9 @@ class SystemControlConfig:
     rsusb_unbind_settle_seconds: float = 0.25
     disable_realsense_autosuspend: bool = False
     usb_sysfs_base: Path = USB_SYSFS_BASE
+    cpu_isolation_enabled: bool = False
+    housekeeping_cpus: str = "0"
+    benchmark_cpus: str = "1-3"
 
 
 class SystemControls:
@@ -44,10 +52,26 @@ class SystemControls:
         self._cpu_restore_needed = False
         self._cpu_original_state: Dict[str, Any] | None = None
         self._rsusb_unbound = False
+        self._cpu_isolation = CpuIsolation(
+            CpuIsolationConfig(
+                enabled=config.cpu_isolation_enabled,
+                housekeeping_cpus=config.housekeeping_cpus,
+                benchmark_cpus=config.benchmark_cpus,
+                use_sudo=config.use_sudo,
+                repo_root=config.repo_root,
+                usb_sysfs_base=config.usb_sysfs_base,
+            )
+        )
 
     @property
     def backend_name(self) -> str:
         return "RSUSB" if self.config.rsusb_backend else "V4L2"
+
+    def cpu_isolation_state(self) -> Dict[str, Any]:
+        return self._cpu_isolation.state()
+
+    def verify_cpu_isolation(self, output: Path | None = None) -> Dict[str, Any]:
+        return self._cpu_isolation.verify(output)
 
     def _privileged(self, command: List[str]) -> List[str]:
         return (
@@ -137,8 +161,10 @@ class SystemControls:
         for helper in helpers:
             if not helper.is_file():
                 raise RuntimeError(f"Required helper is missing: {helper}")
+        self._cpu_isolation.validate_environment()
 
     def prepare_campaign(self, record_dir: Path) -> Dict[str, Any]:
+        self._cpu_isolation.prepare(record_dir)
         cpu_state = self._lock_cpu_once(record_dir)
         if not self.config.rsusb_prepare_each_attempt:
             self._prepare_rsusb_once()
@@ -149,6 +175,7 @@ class SystemControls:
         return cpu_state
 
     def prepare_attempt(self, attempt: int, attempt_dir: Path) -> None:
+        self._cpu_isolation.verify(attempt_dir / "cpu_isolation_before.json")
         if self.config.rsusb_backend:
             if self.config.rsusb_prepare_each_attempt:
                 self._run_rsusb_helper("unbind")
@@ -520,6 +547,7 @@ class SystemControls:
         errors = []
         for description, action in (
             ("restore V4L2 binding", self.restore_v4l2_binding),
+            ("restore CPU isolation", self._cpu_isolation.restore),
             ("restore CPU frequency", self.restore_cpu_frequency),
         ):
             try:

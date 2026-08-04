@@ -239,6 +239,7 @@ def generate_profile(
     period_scale: float,
     minimum_runtime_us: int,
     maximum_period_us: int,
+    maximum_modeled_period_us: int | None = None,
 ) -> Dict[str, Any]:
     if runtime_margin < 1.0:
         raise ValueError("runtime margin must be at least 1.0")
@@ -267,12 +268,34 @@ def generate_profile(
 
     minimum_runtime_ns = minimum_runtime_us * 1000
     maximum_period_ns = maximum_period_us * 1000
+    maximum_modeled_period_ns = (
+        maximum_modeled_period_us * 1000
+        if maximum_modeled_period_us is not None
+        else None
+    )
     rows = []
     detail = []
+    excluded = []
     for signature, instance in sorted(expected):
         observations = [threads[(signature, instance)] for threads in per_run]
         observed_execution_ns = max(item["execution_ns"] for item in observations)
         observed_period_ns = min(item["period_ns"] for item in observations)
+        if (
+            maximum_modeled_period_ns is not None
+            and observed_period_ns > maximum_modeled_period_ns
+        ):
+            excluded.append(
+                {
+                    "signature": signature,
+                    "instance": instance,
+                    "name": str(observations[0]["name"]),
+                    "observed_execution_max_ns": observed_execution_ns,
+                    "observed_logical_period_min_ns": observed_period_ns,
+                    "reason": "observed period exceeds maximum modeled period",
+                    "observations": observations,
+                }
+            )
+            continue
         runtime_ns = max(
             minimum_runtime_ns,
             int(math.ceil(observed_execution_ns * runtime_margin)),
@@ -315,6 +338,9 @@ def generate_profile(
             }
         )
 
+    if not rows:
+        raise ValueError("modeled-period filter excluded every live worker")
+
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8") as handle:
@@ -334,12 +360,16 @@ def generate_profile(
         "period_scale": period_scale,
         "minimum_runtime_us": minimum_runtime_us,
         "maximum_period_us": maximum_period_us,
+        "maximum_modeled_period_us": maximum_modeled_period_us,
+        "source_thread_count": len(expected),
         "thread_count": len(rows),
+        "excluded_thread_count": len(excluded),
         "total_reserved_cpu_utilization": sum(
             row["runtime_ns"] / row["period_ns"] for row in rows
         ),
         "sources": sources,
         "threads": detail,
+        "excluded_threads": excluded,
     }
     metadata_path = output.with_suffix(output.suffix + ".json")
     metadata_path.write_text(
@@ -375,8 +405,24 @@ def main() -> None:
             Path("/proc/sys/kernel/sched_deadline_period_max_us"), 4_194_304
         ),
     )
+    parser.add_argument(
+        "--maximum-modeled-period-us",
+        type=int,
+        help=(
+            "omit workers whose observed minimum stable logical period exceeds "
+            "this threshold; omitted workers can remain SCHED_OTHER with the "
+            "probe's partial-profile mode"
+        ),
+    )
     args = parser.parse_args()
-    if args.minimum_runtime_us < 1 or args.maximum_period_us < 1:
+    if (
+        args.minimum_runtime_us < 1
+        or args.maximum_period_us < 1
+        or (
+            args.maximum_modeled_period_us is not None
+            and args.maximum_modeled_period_us < 1
+        )
+    ):
         raise SystemExit("kernel runtime/period limits must be positive")
     metadata = generate_profile(
         trace_runs=args.trace_run,
@@ -385,6 +431,7 @@ def main() -> None:
         period_scale=args.period_scale,
         minimum_runtime_us=args.minimum_runtime_us,
         maximum_period_us=args.maximum_period_us,
+        maximum_modeled_period_us=args.maximum_modeled_period_us,
     )
     print(json.dumps(metadata, indent=2, sort_keys=True))
 

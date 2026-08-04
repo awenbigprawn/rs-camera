@@ -79,6 +79,11 @@ def _add_camera_results(
             "start_call_ms",
             "stop_call_ms",
             "warmup_deliveries",
+            "warmup_health_deliveries",
+            "warmup_observed_frames",
+            "warmup_duplicate_frames",
+            "warmup_sequence_gaps",
+            "warmup_out_of_order_frames",
             "deliveries",
             "frames",
             "drops",
@@ -154,6 +159,7 @@ def parse_steady_results(
     policy_names: Mapping[str, str],
     drop_caches_configured: bool,
     noise_suite: NoiseSuite,
+    cpu_isolation_state: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     path = record_dir / "steady_summary.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
@@ -227,8 +233,11 @@ def parse_steady_results(
         "transition_warmup_to_gate_ms": 0.0,
         "deadline_assignments": "[]",
         "deadline_live_threads": 0,
+        "deadline_overrun_signals": 0,
+        "deadline_partial_profile": False,
         "deadline_profile_entries": 0,
         "deadline_profile_path": "",
+        "deadline_unassigned_live_threads": 0,
         "rate_monotonic_assignments": "[]",
         "rate_monotonic_highest_priority": 0,
         "rate_monotonic_live_threads": 0,
@@ -248,6 +257,7 @@ def parse_steady_results(
         record_dir=selected_dir,
         noise_suite=noise_suite,
     )
+    flatten("cpu_isolation", cpu_isolation_state or {}, result)
     flatten("workload", case.get("workload", {}), result)
     flatten("physical", case.get("physical", {}), result)
     flatten(

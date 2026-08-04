@@ -85,8 +85,10 @@ class SteadyResultSchemaTest(unittest.TestCase):
         deadline = {
             "assignments": [{"tid": 1, "applied": True}],
             "live_threads": 1,
+            "partial_profile": False,
             "profile_entries": 1,
             "profile_path": "/profile.csv",
+            "unassigned_live_threads": 0,
         }
         rate_monotonic = {
             "assignments": [{"tid": 2, "applied": True, "priority": 80}],
@@ -119,13 +121,23 @@ class SteadyResultSchemaTest(unittest.TestCase):
                         policy_names={"other": "SCHED_OTHER"},
                         drop_caches_configured=False,
                         noise_suite=_NoiseSuite(),
+                        cpu_isolation_state={
+                            "enabled": True,
+                            "active": True,
+                            "housekeeping_cpus": "0",
+                            "benchmark_cpus": "1-3",
+                            "xhci_irqs": [{"irq": 132}],
+                        },
                     )
                 )
 
         self.assertEqual(list(rows[0]), list(rows[1]))
         self.assertEqual(list(rows[0]), list(rows[2]))
         self.assertEqual(rows[0]["deadline_assignments"], "[]")
+        self.assertEqual(rows[0]["deadline_overrun_signals"], 0)
         self.assertEqual(rows[1]["deadline_profile_entries"], 1)
+        self.assertFalse(rows[1]["deadline_partial_profile"])
+        self.assertEqual(rows[1]["deadline_unassigned_live_threads"], 0)
         self.assertEqual(rows[0]["rate_monotonic_assignments"], "[]")
         self.assertEqual(rows[2]["rate_monotonic_priority_levels"], 2)
         self.assertEqual(rows[2]["rate_monotonic_highest_priority"], 80)
@@ -138,6 +150,9 @@ class SteadyResultSchemaTest(unittest.TestCase):
         self.assertEqual(rows[0]["sequence_gaps"], 7)
         self.assertEqual(rows[0]["stale_framesets"], 2)
         self.assertEqual(rows[0]["freshness_analysis_ms"], 1.25)
+        self.assertTrue(rows[0]["cpu_isolation_enabled"])
+        self.assertEqual(rows[0]["cpu_isolation_benchmark_cpus"], "1-3")
+        self.assertIn("132", rows[0]["cpu_isolation_xhci_irqs"])
 
 
 if __name__ == "__main__":

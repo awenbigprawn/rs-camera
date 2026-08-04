@@ -26,6 +26,8 @@ struct deadline_application
     std::string profile_path;
     size_t profile_entries = 0;
     size_t live_threads = 0;
+    size_t unassigned_live_threads = 0;
+    bool partial_profile = false;
     std::vector<deadline_assignment> assignments;
 };
 
@@ -53,7 +55,9 @@ struct rate_monotonic_application
     std::vector<rate_monotonic_assignment> assignments;
 };
 
-deadline_application apply_deadline_profile(const std::string &path);
+deadline_application apply_deadline_profile(const std::string &path,
+                                            bool require_all_live_threads = true);
+uint64_t deadline_overrun_signal_count();
 std::string deadline_application_json(const deadline_application &result);
 rate_monotonic_application apply_rate_monotonic_profile(const std::string &path,
                                                         int policy,

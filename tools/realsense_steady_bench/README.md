@@ -14,7 +14,7 @@ and then records the same number of frame deliveries from every camera.
 | --- | --- |
 | Cartesian factors | workload case, scheduling policy, CPU-noise mode, memory-noise mode, GPU-noise mode, and USB-storage-noise mode |
 | Operational inputs | camera serials, CPU/memory-noise worker counts and affinity, memory buffer size, frame override, repetitions, build jobs, and output path |
-| Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, and RT priority 80 |
+| Fixed controls | V4L2 backend, `uvcvideo`, 1500 MHz CPU, cache drop before each run, CPU 0 for housekeeping/xHCI IRQs, CPUs 1-3 for the benchmark, and RT priority 80 |
 
 Fixed controls are declared once in
 `tools/realsense_bench_common/settings.py`; `steady_settings.py` adds only
@@ -36,7 +36,8 @@ The campaign runner is split by responsibility:
 - `steady_settings.py` contains only steady paths and factor names;
 - `../realsense_bench_common/` owns scheduling/trace command construction,
   retry orchestration, full-device recovery, CPU/RSUSB/kernel controls, cache
-  dropping, common result fields, and old/new artifact-layout resolution.
+  dropping, cgroup-v2 CPU/IRQ isolation, common result fields, and old/new
+  artifact-layout resolution.
 
 ## Measurements
 
@@ -164,6 +165,36 @@ warm-up or camera startup; anonymous memory and swap are not cleared. The
 operation is recorded in `memory_cleanup_before_run.json` and the campaign CSV.
 Run `sudo -v` before the campaign. Cache cleanup is a fixed paper-campaign
 control.
+
+### Fixed CPU and xHCI IRQ isolation
+
+The paper campaign enables CPU isolation by default. Immediately before the
+first measured run, the runner:
+
+1. verifies that CPU 0 and CPUs 1-3 exactly partition the online CPUs;
+2. creates an isolated cgroup-v2 cpuset partition on CPUs 1-3;
+3. discovers every connected D435's xHCI controller from USB sysfs;
+4. resolves the corresponding IRQ numbers from `/proc/interrupts`;
+5. pins those IRQs to CPU 0; and
+6. moves the campaign process into the CPUs 1-3 partition.
+
+All subsequently created probe, librealsense, LiME, and noise processes inherit
+CPUs 1-3. CPU 0 remains available to xHCI IRQ threads and system housekeeping.
+This is a campaign-wide fixed control, so every scheduling policy receives the
+same three application CPUs. At normal completion, Python exception, or
+keyboard interruption, cleanup restores each IRQ's exact prior affinity, moves
+the runner back to its original systemd cgroup, removes the temporary
+partition, and restores CPU frequency.
+
+The active topology is written to `cpu_isolation_campaign.json`, copied into
+the run manifest, and flattened into `cpu_isolation_*` CSV columns. IRQ numbers
+are never hard-coded because they may change across kernels or boots. Use
+`--no-cpu-isolation` only for diagnostics or unsupported machines. Alternative
+platform layouts can be supplied as fixed operational controls, for example:
+
+```sh
+--housekeeping-cpus 0 --benchmark-cpus 1-3
+```
 
 ## Multi-camera warm-up, recovery, and retry
 

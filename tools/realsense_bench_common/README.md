@@ -12,6 +12,7 @@ benchmark directories.
 | `attempts.py` | Generic logical-run attempt loop, retry decisions, recovery aggregation, and common metadata |
 | `recovery.py` | Firmware plus parent composite-USB reset for one or more selected cameras |
 | `system_controls.py` | CPU lock/exact restore, RealSense autosuspend enforcement, optional RSUSB UVC binding, topology snapshots, and kernel-log windows |
+| `cpu_isolation.py` | Reversible cgroup-v2 CPU partitioning, automatic D435-to-xHCI IRQ discovery, IRQ affinity, and exact campaign cleanup |
 | `memory.py` | Filesystem cache dropping and its result fields |
 | `artifacts.py` | Selected-attempt resolution for canonical and historical layouts |
 | `results.py` | Common retry and recovery CSV fields |

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <climits>
+#include <csignal>
 #include <cstring>
 #include <dlfcn.h>
 #include <fstream>
@@ -18,10 +20,35 @@
 #define SCHED_DEADLINE 6
 #endif
 
+#ifndef SCHED_FLAG_DL_OVERRUN
+#define SCHED_FLAG_DL_OVERRUN 0x04
+#endif
+
 namespace rs_camera
 {
 namespace
 {
+volatile sig_atomic_t deadline_overrun_signals = 0;
+
+void deadline_overrun_handler(int)
+{
+    if (deadline_overrun_signals < SIG_ATOMIC_MAX)
+        ++deadline_overrun_signals;
+}
+
+void enable_deadline_overrun_signals()
+{
+    struct sigaction action{};
+    action.sa_handler = deadline_overrun_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    if (sigaction(SIGXCPU, &action, nullptr) != 0)
+        throw std::runtime_error(
+            "Cannot install SCHED_DEADLINE overrun handler: " +
+            std::string(std::strerror(errno)));
+    deadline_overrun_signals = 0;
+}
+
 struct sched_attr_compat
 {
     uint32_t size;
@@ -190,6 +217,7 @@ int set_deadline(int tid, uint64_t runtime_ns, uint64_t deadline_ns, uint64_t pe
     sched_attr_compat attributes{};
     attributes.size = sizeof(attributes);
     attributes.sched_policy = SCHED_DEADLINE;
+    attributes.sched_flags = SCHED_FLAG_DL_OVERRUN;
     attributes.sched_runtime = runtime_ns;
     attributes.sched_deadline = deadline_ns;
     attributes.sched_period = period_ns;
@@ -248,8 +276,10 @@ std::string escape_json(const std::string &value)
 }
 } // namespace
 
-deadline_application apply_deadline_profile(const std::string &path)
+deadline_application apply_deadline_profile(const std::string &path,
+                                            bool require_all_live_threads)
 {
+    enable_deadline_overrun_signals();
     const auto profile = load_profile(path);
     const auto threads = snapshot_threads();
     deadline_application result;
@@ -266,10 +296,17 @@ deadline_application apply_deadline_profile(const std::string &path)
         live.emplace(std::make_pair(signature, instance), &thread);
     }
 
-    if (live.size() != profile.size())
+    if (require_all_live_threads && live.size() != profile.size())
         throw std::runtime_error(
             "SCHED_DEADLINE profile/live-thread count mismatch: profile=" +
             std::to_string(profile.size()) + ", live=" + std::to_string(live.size()));
+    if (profile.size() > live.size())
+        throw std::runtime_error(
+            "SCHED_DEADLINE profile has more entries than live threads: profile=" +
+            std::to_string(profile.size()) + ", live=" + std::to_string(live.size()));
+
+    result.partial_profile = live.size() != profile.size();
+    result.unassigned_live_threads = live.size() - profile.size();
 
     for (const auto &entry : profile)
     {
@@ -309,12 +346,22 @@ deadline_application apply_deadline_profile(const std::string &path)
     return result;
 }
 
+uint64_t deadline_overrun_signal_count()
+{
+    return static_cast<uint64_t>(deadline_overrun_signals);
+}
+
 std::string deadline_application_json(const deadline_application &result)
 {
     std::ostringstream output;
     output << "{\"profile_path\":\"" << escape_json(result.profile_path)
            << "\",\"profile_entries\":" << result.profile_entries
-           << ",\"live_threads\":" << result.live_threads << ",\"assignments\":[";
+           << ",\"live_threads\":" << result.live_threads
+           << ",\"unassigned_live_threads\":" << result.unassigned_live_threads
+           << ",\"partial_profile\":"
+           << (result.partial_profile ? "true" : "false")
+           << ",\"overrun_signals\":" << deadline_overrun_signal_count()
+           << ",\"assignments\":[";
     for (size_t index = 0; index < result.assignments.size(); ++index)
     {
         if (index)

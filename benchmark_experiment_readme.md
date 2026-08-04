@@ -300,6 +300,15 @@ CPU 1-3:
   camera application and librealsense threads
 ```
 
+Pilot validation on the two-camera 60 FPS stress workload found that this
+layout removed all duplicate frames, sequence gaps, measurement timeouts, and
+SCHED_DEADLINE overrun signals in three 20-second runs. Under the same workload
+and Deadline profile without isolation, the three runs reported respectively
+2/2, 103/119, and 7/7 duplicate/gap events. The main study therefore treats
+this CPU/IRQ layout as a fixed control for every scheduling policy, not as an
+experimental factor. Longer repetitions remain necessary for the formal
+claim.
+
 CPU-noise workers should be co-located with the camera threads when measuring
 direct CPU contention. Record the effective affinity of:
 

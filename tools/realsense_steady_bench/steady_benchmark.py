@@ -68,6 +68,9 @@ class RealSenseSteadyBench(Benchmark):
         lime: Path,
         use_lime: bool,
         use_sudo: bool,
+        cpu_isolation_enabled: bool,
+        housekeeping_cpus: str,
+        benchmark_cpus: str,
         cpu_noise_modes: List[str],
         cpu_noise_workers: int,
         cpu_noise_warmup_seconds: float,
@@ -142,6 +145,9 @@ class RealSenseSteadyBench(Benchmark):
                 rsusb_usb_devices=CAMPAIGN_RSUSB_USB_DEVICES,
                 rsusb_helper=RSUSB_HELPER,
                 disable_realsense_autosuspend=(CAMPAIGN_BACKEND == "v4l2"),
+                cpu_isolation_enabled=cpu_isolation_enabled,
+                housekeeping_cpus=housekeeping_cpus,
+                benchmark_cpus=benchmark_cpus,
             )
         )
         vulkan_icd = gpu_noise_vulkan_icd.resolve() if gpu_noise_vulkan_icd else None
@@ -304,6 +310,8 @@ class RealSenseSteadyBench(Benchmark):
             profile = scheduler_profile_path or Path(str(probe["deadline_profile"]))
         if policy == "deadline":
             command += ["--deadline-profile", str(profile)]
+            if probe.get("deadline_allow_partial_profile", False):
+                command.append("--deadline-allow-partial-profile")
         elif policy in {"rr-rm", "fifo-rm"}:
             command += [
                 "--rate-monotonic-profile",
@@ -479,6 +487,9 @@ class RealSenseSteadyBench(Benchmark):
                 attempt_dir, kernel_before, kernel_error
             )
             self._system_controls.snapshot_topology(after)
+            self._system_controls.verify_cpu_isolation(
+                attempt_dir / "cpu_isolation_after.json"
+            )
 
         if summary_path.is_file():
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -554,6 +565,7 @@ class RealSenseSteadyBench(Benchmark):
             ),
             "lime_enabled": self._use_lime,
             "cpu_frequency_mhz": self._system_controls.config.cpu_frequency_mhz,
+            "cpu_isolation": self._system_controls.cpu_isolation_state(),
             "drop_caches_before_attempt": self._drop_caches_before_run,
             "recover_on_failure": self._recover_on_failure,
             "recovery_reset_timeout_ms": self._recovery.config.reset_timeout_ms,
@@ -627,6 +639,7 @@ class RealSenseSteadyBench(Benchmark):
             policy_names=POLICY_NAMES,
             drop_caches_configured=self._drop_caches_before_run,
             noise_suite=self._noise_suite,
+            cpu_isolation_state=self._system_controls.cpu_isolation_state(),
         )
         if not bool(result.get("success", False)):
             self._logical_failures.append(

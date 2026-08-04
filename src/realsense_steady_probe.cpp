@@ -39,6 +39,7 @@ struct options
     std::string rate_monotonic_policy;
     std::string warmup_ready_file;
     std::string measurement_start_gate;
+    bool deadline_allow_partial_profile = false;
     int scheduler_apply_after_frames = 0;
     int rate_monotonic_highest_priority = 80;
     int camera_count = 1;
@@ -93,6 +94,16 @@ struct stream_metrics
     std::vector<double> host_interarrival_ms;
 };
 
+struct warmup_stream_metrics
+{
+    uint64_t observed_frames = 0;
+    uint64_t duplicate_frames = 0;
+    uint64_t sequence_gaps = 0;
+    uint64_t out_of_order_frames = 0;
+    bool has_last = false;
+    uint64_t last_frame_number = 0;
+};
+
 struct camera_metrics
 {
     std::mutex mutex;
@@ -110,12 +121,14 @@ struct camera_metrics
     uint64_t first_measured_ns = 0;
     uint64_t last_measured_ns = 0;
     uint64_t last_delivery_ns = 0;
+    uint64_t warmup_health_deliveries = 0;
     bool scheduler_ready = false;
     bool warmed = false;
     bool completed = false;
     std::vector<double> delivery_interarrival_ms;
     std::vector<double> wait_ms;
     std::map<std::string, stream_metrics> streams;
+    std::map<std::string, warmup_stream_metrics> warmup_streams;
     std::vector<frame_event> events;
 };
 
@@ -223,6 +236,8 @@ options parse_args(int argc, char **argv)
             opts.events_output = value(arg);
         else if (arg == "--deadline-profile")
             opts.deadline_profile = value(arg);
+        else if (arg == "--deadline-allow-partial-profile")
+            opts.deadline_allow_partial_profile = true;
         else if (arg == "--deadline-apply-after-frames")
             opts.scheduler_apply_after_frames = std::stoi(value(arg));
         else if (arg == "--scheduler-apply-after-frames")
@@ -257,6 +272,7 @@ options parse_args(int argc, char **argv)
                 << "  --color-width N --color-height N\n"
                 << "  --summary-output PATH --events-output PATH\n"
                 << "  --deadline-profile PATH       Apply per-thread SCHED_DEADLINE during warm-up\n"
+                << "  --deadline-allow-partial-profile  Leave live workers absent from the profile as SCHED_OTHER\n"
                 << "  --rate-monotonic-profile PATH Apply per-thread fixed-priority scheduling during warm-up\n"
                 << "  --rate-monotonic-policy rr|fifo\n"
                 << "  --rate-monotonic-highest-priority N\n"
@@ -596,6 +612,68 @@ int scheduler_apply_threshold(const options &opts)
     return std::min(opts.fps, std::max(1, opts.warmup_frames / 10));
 }
 
+size_t expected_stream_count(const options &opts)
+{
+    if (opts.stream_mode == "depth")
+        return 1;
+    if (opts.stream_mode == "depth_color")
+        return 2;
+    if (opts.stream_mode == "d435_all")
+        return 4;
+    return 0;
+}
+
+void record_warmup_frame(camera_metrics &metrics, const rs2::frame &frame)
+{
+    if (!frame)
+        return;
+    auto &stream = metrics.warmup_streams[stream_key(frame)];
+    const uint64_t number = frame.get_frame_number();
+    if (stream.has_last)
+    {
+        if (number == stream.last_frame_number)
+            ++stream.duplicate_frames;
+        else if (number < stream.last_frame_number)
+            ++stream.out_of_order_frames;
+        else if (number > stream.last_frame_number + 1)
+            stream.sequence_gaps += number - stream.last_frame_number - 1;
+    }
+    stream.has_last = true;
+    stream.last_frame_number = number;
+    ++stream.observed_frames;
+}
+
+std::string warmup_health_error(const camera_runtime &camera, const options &opts)
+{
+    const auto &metrics = camera.metrics;
+    const size_t expected = expected_stream_count(opts);
+    if (metrics.warmup_streams.size() != expected)
+        return camera.serial + ": warm-up freshness expected " +
+               std::to_string(expected) + " streams but observed " +
+               std::to_string(metrics.warmup_streams.size());
+
+    for (const auto &[key, stream] : metrics.warmup_streams)
+    {
+        const bool missing_from_framesets =
+            opts.delivery == "wait" &&
+            stream.observed_frames != metrics.warmup_health_deliveries;
+        if (stream.observed_frames < 2 || missing_from_framesets ||
+            stream.duplicate_frames || stream.sequence_gaps ||
+            stream.out_of_order_frames)
+        {
+            std::ostringstream message;
+            message << camera.serial << ": warm-up freshness failed for " << key
+                    << " (window_deliveries=" << metrics.warmup_health_deliveries
+                    << ", observed=" << stream.observed_frames
+                    << ", duplicates=" << stream.duplicate_frames
+                    << ", gaps=" << stream.sequence_gaps
+                    << ", out_of_order=" << stream.out_of_order_frames << ")";
+            return message.str();
+        }
+    }
+    return "";
+}
+
 void record_delivery(camera_runtime &camera,
                      const rs2::frame &frame,
                      uint64_t host_ns,
@@ -606,6 +684,7 @@ void record_delivery(camera_runtime &camera,
     bool became_scheduler_ready = false;
     bool became_warm = false;
     bool became_complete = false;
+    std::string health_error;
     {
         std::lock_guard<std::mutex> lock(camera.metrics.mutex);
         auto &metrics = camera.metrics;
@@ -617,6 +696,22 @@ void record_delivery(camera_runtime &camera,
             if (!metrics.first_warmup_ns)
                 metrics.first_warmup_ns = host_ns;
             ++metrics.warmup_deliveries;
+            const uint64_t health_window = std::min(
+                static_cast<uint64_t>(opts.warmup_frames),
+                static_cast<uint64_t>(std::max(2, opts.fps)));
+            const uint64_t health_start =
+                static_cast<uint64_t>(opts.warmup_frames) - health_window + 1;
+            if (metrics.warmup_deliveries >= health_start)
+            {
+                ++metrics.warmup_health_deliveries;
+                if (frame.is<rs2::frameset>())
+                {
+                    for (auto &&child : frame.as<rs2::frameset>())
+                        record_warmup_frame(metrics, child);
+                }
+                else
+                    record_warmup_frame(metrics, frame);
+            }
             if (modeled_scheduler_requested(opts) && !metrics.scheduler_ready &&
                 metrics.warmup_deliveries >=
                     static_cast<uint64_t>(scheduler_apply_threshold(opts)))
@@ -626,8 +721,12 @@ void record_delivery(camera_runtime &camera,
             }
             if (metrics.warmup_deliveries >= static_cast<uint64_t>(opts.warmup_frames))
             {
-                metrics.warmed = true;
-                became_warm = true;
+                health_error = warmup_health_error(camera, opts);
+                if (health_error.empty())
+                {
+                    metrics.warmed = true;
+                    became_warm = true;
+                }
             }
         }
         else if (control.measurement_enabled.load())
@@ -661,6 +760,12 @@ void record_delivery(camera_runtime &camera,
                 became_complete = true;
             }
         }
+    }
+
+    if (!health_error.empty())
+    {
+        set_failure(control, "Warm-up freshness check failed: " + health_error);
+        return;
     }
 
     if (became_scheduler_ready)
@@ -1004,7 +1109,9 @@ void write_summary(const std::string &path,
         << ",\"main_thread_policy\":" << quoted(scheduler_policy())
         << ",\"steady_worker_policy\":"
         << quoted(deadline_result
-                      ? "SCHED_DEADLINE"
+                      ? (deadline_result->partial_profile
+                             ? "SCHED_DEADLINE+SCHED_OTHER"
+                             : "SCHED_DEADLINE")
                       : (rate_monotonic_result
                              ? rate_monotonic_result->policy
                              : scheduler_policy()))
@@ -1090,6 +1197,24 @@ void write_summary(const std::string &path,
                     ? ns_to_ms(metrics.stop_end_ns - metrics.stop_begin_ns)
                     : 0.0)
             << ",\"warmup_deliveries\":" << metrics.warmup_deliveries
+            << ",\"warmup_health_deliveries\":"
+            << metrics.warmup_health_deliveries;
+        uint64_t warmup_observed = 0;
+        uint64_t warmup_duplicates = 0;
+        uint64_t warmup_gaps = 0;
+        uint64_t warmup_out_of_order = 0;
+        for (const auto &[key, stream] : metrics.warmup_streams)
+        {
+            (void)key;
+            warmup_observed += stream.observed_frames;
+            warmup_duplicates += stream.duplicate_frames;
+            warmup_gaps += stream.sequence_gaps;
+            warmup_out_of_order += stream.out_of_order_frames;
+        }
+        out << ",\"warmup_observed_frames\":" << warmup_observed
+            << ",\"warmup_duplicate_frames\":" << warmup_duplicates
+            << ",\"warmup_sequence_gaps\":" << warmup_gaps
+            << ",\"warmup_out_of_order_frames\":" << warmup_out_of_order
             << ",\"deliveries\":" << metrics.deliveries
             << ",\"frames\":" << metrics.frames
             << ",\"drops\":" << total_drops(metrics)
@@ -1261,7 +1386,8 @@ try
                     deadline_result =
                         std::make_unique<rs_camera::deadline_application>(
                             rs_camera::apply_deadline_profile(
-                                opts.deadline_profile));
+                                opts.deadline_profile,
+                                !opts.deadline_allow_partial_profile));
                     std::cout << "RS_DEADLINE {\"profile_entries\":"
                               << deadline_result->profile_entries
                               << ",\"live_threads\":"

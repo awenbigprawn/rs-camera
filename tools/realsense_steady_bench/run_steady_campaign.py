@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 from typing import Any, Dict, List
 
@@ -16,6 +17,9 @@ sys.path.insert(0, str(_BOOTSTRAP_TOOLS_DIR))
 
 from steady_settings import (
     BENCHKIT_PATH,
+    CAMPAIGN_BENCHMARK_CPUS,
+    CAMPAIGN_CPU_ISOLATION_ENABLED,
+    CAMPAIGN_HOUSEKEEPING_CPUS,
     CPU_NOISE_MODES,
     DEFAULT_BROADCOM_VULKAN_ICD,
     DEFAULT_BUILD_DIR,
@@ -61,6 +65,16 @@ def run_with_cleanup(
     campaign: CampaignCartesianProduct,
     benchmark: RealSenseSteadyBench,
 ) -> None:
+    previous_handlers = {
+        signum: signal.getsignal(signum)
+        for signum in (signal.SIGHUP, signal.SIGTERM)
+    }
+
+    def stop_campaign(signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt(f"received signal {signum}")
+
+    for signum in previous_handlers:
+        signal.signal(signum, stop_campaign)
     try:
         campaign.run()
         benchmark.assert_all_runs_successful()
@@ -72,6 +86,8 @@ def run_with_cleanup(
             if not campaign_failed:
                 raise
             print(f"[CLEANUP] {error}", file=sys.stderr)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def main() -> None:
@@ -120,12 +136,40 @@ def main() -> None:
             "10 percent of warm-up, capped at one second"
         ),
     )
+    parser.add_argument(
+        "--deadline-allow-partial-profile",
+        action="store_true",
+        help=(
+            "apply SCHED_DEADLINE only to workers listed in the profile and "
+            "leave other live workers under SCHED_OTHER"
+        ),
+    )
     parser.add_argument("--serial", dest="serials", action="append")
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument("--no-lime", action="store_true")
     parser.add_argument("--no-sudo", action="store_true")
+    parser.add_argument(
+        "--cpu-isolation",
+        action=argparse.BooleanOptionalAction,
+        default=CAMPAIGN_CPU_ISOLATION_ENABLED,
+        help=(
+            "place the campaign in an isolated cgroup-v2 CPU partition and "
+            "pin automatically discovered RealSense xHCI IRQs to the "
+            "housekeeping CPUs (default: enabled)"
+        ),
+    )
+    parser.add_argument(
+        "--housekeeping-cpus",
+        default=CAMPAIGN_HOUSEKEEPING_CPUS,
+        help="Linux CPU list reserved for housekeeping and camera xHCI IRQs",
+    )
+    parser.add_argument(
+        "--benchmark-cpus",
+        default=CAMPAIGN_BENCHMARK_CPUS,
+        help="Linux CPU list for the benchmark, librealsense, and noise",
+    )
     parser.add_argument(
         "--recover-on-failure",
         choices=("none", "full-reset"),
@@ -349,6 +393,9 @@ def main() -> None:
             case.setdefault("probe", {})["deadline_apply_after_frames"] = (
                 args.deadline_apply_after_frames
             )
+    if args.deadline_allow_partial_profile:
+        for case in cases:
+            case.setdefault("probe", {})["deadline_allow_partial_profile"] = True
     if args.serials:
         for case in cases:
             case.setdefault("probe", {})["serials"] = args.serials
@@ -416,6 +463,9 @@ def main() -> None:
         lime=args.lime,
         use_lime=not args.no_lime,
         use_sudo=not args.no_sudo,
+        cpu_isolation_enabled=args.cpu_isolation,
+        housekeeping_cpus=args.housekeeping_cpus,
+        benchmark_cpus=args.benchmark_cpus,
         cpu_noise_modes=args.cpu_noise_modes,
         cpu_noise_workers=args.cpu_noise_workers,
         cpu_noise_warmup_seconds=args.cpu_noise_warmup_seconds,
@@ -445,6 +495,16 @@ def main() -> None:
         max_attempts_per_run=args.max_attempts_per_run,
         build_jobs=args.build_jobs,
     )
+    campaign_constants = {
+        **FIXED_CAMPAIGN_CONSTANTS,
+        "fixed_cpu_isolation": args.cpu_isolation,
+        "fixed_housekeeping_cpus": (
+            args.housekeeping_cpus if args.cpu_isolation else ""
+        ),
+        "fixed_benchmark_cpus": (
+            args.benchmark_cpus if args.cpu_isolation else ""
+        ),
+    }
     campaign = CampaignCartesianProduct(
         name="realsense_steady",
         benchmark=benchmark,
@@ -457,7 +517,7 @@ def main() -> None:
             "gpu_noise": args.gpu_noise_modes,
             "usb_storage_noise": args.usb_storage_noise_modes,
         },
-        constants=FIXED_CAMPAIGN_CONSTANTS,
+        constants=campaign_constants,
         debug=False,
         gdb=False,
         enable_data_dir=True,

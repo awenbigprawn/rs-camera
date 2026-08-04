@@ -16,7 +16,7 @@ from steady_benchmark import RealSenseSteadyBench  # noqa: E402
 
 
 class RateMonotonicCommandTest(unittest.TestCase):
-    def _command(self, policy):
+    def _command(self, policy, allow_partial_deadline=False):
         bench = object.__new__(RealSenseSteadyBench)
         bench._priority = 80
         bench._probe = Path("/probe")
@@ -28,6 +28,7 @@ class RateMonotonicCommandTest(unittest.TestCase):
                     "measurement_duration_ms": 600000,
                     "warmup_frames": 300,
                     "deadline_profile": "/source-profile.csv",
+                    "deadline_allow_partial_profile": allow_partial_deadline,
                 }
             },
             policy=policy,
@@ -56,6 +57,11 @@ class RateMonotonicCommandTest(unittest.TestCase):
         command = self._command("rr-rm")
         duration_index = command.index("--measurement-duration-ms")
         self.assertEqual(command[duration_index + 1], "600000")
+
+    def test_partial_deadline_profile_is_explicitly_forwarded(self):
+        command = self._command("deadline", allow_partial_deadline=True)
+        self.assertIn("--deadline-profile", command)
+        self.assertIn("--deadline-allow-partial-profile", command)
 
 
 if __name__ == "__main__":

@@ -33,8 +33,15 @@ class _SystemControls:
     def prepare_campaign(self, record_dir):
         del record_dir
 
+    @staticmethod
+    def cpu_isolation_state():
+        return {"enabled": False, "active": False, "xhci_irqs": []}
+
     def prepare_attempt(self, attempt, attempt_dir):
         del attempt, attempt_dir
+
+    def verify_cpu_isolation(self, output):
+        del output
 
 
 class _NoiseSuite:
