@@ -478,6 +478,15 @@ Set a fixed dose per campaign with `--memory-noise-workers N` and
 pressure until bandwidth saturates, but they also consume CPU execution time;
 the reported process CPU equivalents quantify that unavoidable component. Use
 `--memory-noise-cpu-affinity` when a controlled CPU placement is required.
+Use `--memory-noise-target-mib-per-second R` to pace the aggregate estimated
+read-plus-write traffic across all workers. A value of `0` keeps the original
+unlimited behavior. Ready and summary artifacts record the requested rate,
+achieved rate, and achieved/target ratio. This rate is an estimate based on one
+read and one write per copied byte, not a hardware memory-controller counter.
+The default `--memory-noise-copy-chunk-kib 1024` rate-limits 1 MiB pieces while
+still walking the full per-worker buffer. This avoids turning a low average
+target into short full-bandwidth 64 MiB bursts. The chunk size must divide the
+buffer size exactly; keep it fixed when comparing bandwidth levels.
 
 For example, compare baseline and four-worker memory contention:
 
@@ -490,6 +499,8 @@ sudo -v
   --memory-noise-modes none fixed_copy \
   --memory-noise-workers 4 \
   --memory-noise-buffer-size-mib 64 \
+  --memory-noise-copy-chunk-kib 1024 \
+  --memory-noise-target-mib-per-second 2000 \
   --gpu-noise-modes none \
   --usb-storage-noise-modes none \
   --nb-runs 3 \

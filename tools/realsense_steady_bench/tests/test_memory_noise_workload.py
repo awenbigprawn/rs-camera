@@ -62,6 +62,8 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                     "2",
                     "--buffer-size-mib",
                     "4",
+                    "--copy-chunk-kib",
+                    "256",
                     "--warmup-seconds",
                     "0.05",
                     "--ready-file",
@@ -84,6 +86,8 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                 self.assertTrue(ready["ready"])
                 self.assertEqual(ready["workers"], 2)
                 self.assertEqual(ready["buffer_size_mib"], 4)
+                self.assertEqual(ready["copy_chunk_kib"], 256)
+                self.assertEqual(ready["chunks_per_buffer_pass"], 16)
                 self.assertEqual(ready["buffers_per_worker"], 2)
                 self.assertEqual(ready["total_allocated_bytes"], 16 * 1024 * 1024)
                 self.assertEqual(
@@ -92,6 +96,8 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                 self.assertGreater(
                     ready["warmup_estimated_memory_mib_per_second"], 0.0
                 )
+                self.assertFalse(ready["rate_limited"])
+                self.assertEqual(ready["target_memory_mib_per_second"], 0.0)
 
                 time.sleep(0.05)
                 process.terminate()
@@ -102,6 +108,7 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                 self.assertEqual(summary["workers"], 2)
                 self.assertEqual(summary["buffer_size_mib"], 4)
                 self.assertGreater(summary["payload_bytes_copied"], 0)
+                self.assertGreater(summary["total_chunks"], 0)
                 self.assertEqual(
                     summary["estimated_memory_traffic_bytes"],
                     2 * summary["payload_bytes_copied"],
@@ -121,6 +128,8 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                     modes=("fixed_copy",),
                     workers=2,
                     buffer_size_mib=4,
+                    copy_chunk_kib=256,
+                    target_memory_mib_per_second=256.0,
                     warmup_seconds=0.05,
                     ready_timeout_seconds=5.0,
                     cpu_affinity=None,
@@ -131,6 +140,9 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
                 ready = noise.start("fixed_copy", root)
                 self.assertTrue(ready["ready"])
                 self.assertEqual(ready["workers"], 2)
+                self.assertEqual(ready["copy_chunk_kib"], 256)
+                self.assertTrue(ready["rate_limited"])
+                self.assertEqual(ready["target_memory_mib_per_second"], 256.0)
                 time.sleep(0.05)
                 noise.stop(root)
             finally:
@@ -148,6 +160,9 @@ class MemoryNoiseWorkloadTests(unittest.TestCase):
             self.assertEqual(
                 summary["memory_access"], "thread_private_memcpy_read_write"
             )
+            self.assertEqual(summary["target_memory_mib_per_second"], 256.0)
+            self.assertEqual(summary["copy_chunk_kib"], 256)
+            self.assertLess(summary["estimated_memory_mib_per_second"], 400.0)
 
 
 if __name__ == "__main__":

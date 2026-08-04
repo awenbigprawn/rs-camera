@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -241,6 +242,24 @@ def main() -> None:
         default=64,
         help="size of each source and destination buffer per worker (default: 64 MiB)",
     )
+    parser.add_argument(
+        "--memory-noise-target-mib-per-second",
+        type=float,
+        default=0.0,
+        help=(
+            "aggregate estimated read+write traffic limit for fixed_copy; "
+            "0 preserves unlimited traffic"
+        ),
+    )
+    parser.add_argument(
+        "--memory-noise-copy-chunk-kib",
+        type=int,
+        default=1024,
+        help=(
+            "copy and pacing quantum within each fixed_copy buffer "
+            "(default: 1024 KiB)"
+        ),
+    )
     parser.add_argument("--memory-noise-warmup-seconds", type=float, default=10.0)
     parser.add_argument(
         "--memory-noise-ready-timeout-seconds", type=float, default=30.0
@@ -323,6 +342,31 @@ def main() -> None:
         raise SystemExit("--memory-noise-workers must be positive")
     if args.memory_noise_buffer_size_mib < 1:
         raise SystemExit("--memory-noise-buffer-size-mib must be positive")
+    if args.memory_noise_copy_chunk_kib < 1:
+        raise SystemExit("--memory-noise-copy-chunk-kib must be positive")
+    memory_noise_buffer_size_kib = args.memory_noise_buffer_size_mib * 1024
+    if args.memory_noise_copy_chunk_kib > memory_noise_buffer_size_kib:
+        raise SystemExit(
+            "--memory-noise-copy-chunk-kib must not exceed the buffer size"
+        )
+    if memory_noise_buffer_size_kib % args.memory_noise_copy_chunk_kib != 0:
+        raise SystemExit(
+            "--memory-noise-copy-chunk-kib must divide the buffer size exactly"
+        )
+    if (
+        not math.isfinite(args.memory_noise_target_mib_per_second)
+        or args.memory_noise_target_mib_per_second < 0.0
+    ):
+        raise SystemExit(
+            "--memory-noise-target-mib-per-second must be finite and non-negative"
+        )
+    if (
+        args.memory_noise_target_mib_per_second > 0.0
+        and args.memory_noise_target_mib_per_second < 1.0
+    ):
+        raise SystemExit(
+            "--memory-noise-target-mib-per-second must be zero or at least 1"
+        )
     if args.memory_noise_warmup_seconds <= 0:
         raise SystemExit("--memory-noise-warmup-seconds must be positive")
     if args.memory_noise_ready_timeout_seconds <= args.memory_noise_warmup_seconds:
@@ -474,6 +518,10 @@ def main() -> None:
         memory_noise_modes=args.memory_noise_modes,
         memory_noise_workers=args.memory_noise_workers,
         memory_noise_buffer_size_mib=args.memory_noise_buffer_size_mib,
+        memory_noise_copy_chunk_kib=args.memory_noise_copy_chunk_kib,
+        memory_noise_target_mib_per_second=(
+            args.memory_noise_target_mib_per_second
+        ),
         memory_noise_warmup_seconds=args.memory_noise_warmup_seconds,
         memory_noise_ready_timeout_seconds=args.memory_noise_ready_timeout_seconds,
         memory_noise_cpu_affinity=args.memory_noise_cpu_affinity,

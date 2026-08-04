@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -44,6 +45,8 @@ class MemoryNoiseConfig:
     modes: tuple[str, ...]
     workers: int
     buffer_size_mib: int
+    copy_chunk_kib: int
+    target_memory_mib_per_second: float
     warmup_seconds: float
     ready_timeout_seconds: float
     cpu_affinity: str | None
@@ -364,6 +367,10 @@ class FixedCopyMemoryNoise(ManagedNoiseProcess):
             "mode": mode,
             "workers": self.config.workers,
             "buffer_size_mib": self.config.buffer_size_mib,
+            "copy_chunk_kib": self.config.copy_chunk_kib,
+            "target_memory_mib_per_second": (
+                self.config.target_memory_mib_per_second
+            ),
             "buffers_per_worker": 2,
             "warmup_seconds": self.config.warmup_seconds,
             "cpu_affinity": self.config.cpu_affinity,
@@ -385,8 +392,12 @@ class FixedCopyMemoryNoise(ManagedNoiseProcess):
             str(self.config.workers),
             "--buffer-size-mib",
             str(self.config.buffer_size_mib),
+            "--copy-chunk-kib",
+            str(self.config.copy_chunk_kib),
             "--warmup-seconds",
             str(self.config.warmup_seconds),
+            "--target-memory-mib-per-second",
+            str(self.config.target_memory_mib_per_second),
         ]
         return command
 
@@ -404,6 +415,11 @@ class FixedCopyMemoryNoise(ManagedNoiseProcess):
             f"{ready.get('workers', 0)} workers ready at "
             f"{ready.get('warmup_estimated_memory_mib_per_second', 0):.1f} "
             "MiB/s estimated read+write traffic"
+            + (
+                f" (target {self.config.target_memory_mib_per_second:.1f})"
+                if self.config.target_memory_mib_per_second > 0.0
+                else " (unlimited)"
+            )
         )
 
     def _summary_valid(self, summary: Mapping[str, Any]) -> bool:
@@ -413,6 +429,13 @@ class FixedCopyMemoryNoise(ManagedNoiseProcess):
             == "thread_private_memcpy_read_write"
             and summary.get("workers") == self.config.workers
             and summary.get("buffer_size_mib") == self.config.buffer_size_mib
+            and summary.get("copy_chunk_kib") == self.config.copy_chunk_kib
+            and math.isclose(
+                float(summary.get("target_memory_mib_per_second", -1.0)),
+                self.config.target_memory_mib_per_second,
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
             and int(summary.get("payload_bytes_copied", 0)) > 0
             and float(summary.get("estimated_memory_mib_per_second", 0)) > 0.0
         )

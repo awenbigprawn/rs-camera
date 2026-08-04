@@ -79,6 +79,8 @@ class RealSenseSteadyBench(Benchmark):
         memory_noise_modes: List[str],
         memory_noise_workers: int,
         memory_noise_buffer_size_mib: int,
+        memory_noise_copy_chunk_kib: int,
+        memory_noise_target_mib_per_second: float,
         memory_noise_warmup_seconds: float,
         memory_noise_ready_timeout_seconds: float,
         memory_noise_cpu_affinity: str | None,
@@ -169,6 +171,10 @@ class RealSenseSteadyBench(Benchmark):
                     modes=tuple(memory_noise_modes),
                     workers=memory_noise_workers,
                     buffer_size_mib=memory_noise_buffer_size_mib,
+                    copy_chunk_kib=memory_noise_copy_chunk_kib,
+                    target_memory_mib_per_second=(
+                        memory_noise_target_mib_per_second
+                    ),
                     warmup_seconds=memory_noise_warmup_seconds,
                     ready_timeout_seconds=memory_noise_ready_timeout_seconds,
                     cpu_affinity=memory_noise_cpu_affinity,
