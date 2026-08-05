@@ -106,6 +106,11 @@ def _add_camera_results(
             camera.get("delivery_interarrival_ms", {}),
             result,
         )
+        flatten(
+            f"{prefix}_storage",
+            camera.get("storage", {}),
+            result,
+        )
 
 
 def _add_trace_results(result: Dict[str, Any], record_dir: Path) -> None:
@@ -196,6 +201,9 @@ def parse_steady_results(
         "usb_storage_noise_mode": run_variables["usb_storage_noise"],
         "usb_storage_noise_enabled": run_variables["usb_storage_noise"] != "none",
         "camera_count": data.get("run", {}).get("camera_count", 0),
+        "fixed_event_storage": data.get("run", {}).get(
+            "fixed_event_storage", False
+        ),
         "deliveries": aggregate.get("deliveries", 0),
         "frames": aggregate.get("frames", 0),
         "drops": aggregate.get("drops", 0),

@@ -1,4 +1,7 @@
+#include "rs_camera/benchmark_utils.h"
 #include "rs_camera/deadline_scheduler.h"
+#include "rs_camera/realsense_utils.h"
+#include "rs_camera/steady_metrics.h"
 #include "rs_camera/trace_marker.h"
 
 #include <librealsense2/rs.hpp>
@@ -6,7 +9,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -27,6 +29,27 @@
 
 namespace
 {
+using rs_camera::csv_field;
+using rs_camera::device_info;
+using rs_camera::ns_to_ms;
+using rs_camera::quoted;
+using rs_camera::summarize;
+using rs_camera::wait_for_pipeline_frame;
+using rs_camera::write_stats_json;
+using rs_camera::steady::add_freshness;
+using rs_camera::steady::analyze_freshness;
+using rs_camera::steady::camera_freshness_metrics;
+using rs_camera::steady::camera_metrics;
+using rs_camera::steady::delivery_freshness_metrics;
+using rs_camera::steady::expected_stream_count;
+using rs_camera::steady::frame_freshness_metrics;
+using rs_camera::steady::make_storage_plan;
+using rs_camera::steady::prepare_camera_metrics;
+using rs_camera::steady::record_measured_frame;
+using rs_camera::steady::record_warmup_frame;
+using rs_camera::steady::total_drops;
+using rs_camera::steady::warmup_health_error;
+
 struct options
 {
     std::vector<std::string> serials;
@@ -57,108 +80,12 @@ struct options
     int measurement_gate_timeout_ms = 0;
 };
 
-struct stats
-{
-    size_t n = 0;
-    double min = 0.0;
-    double max = 0.0;
-    double mean = 0.0;
-    double stddev = 0.0;
-    double p50 = 0.0;
-    double p90 = 0.0;
-    double p99 = 0.0;
-    double p999 = 0.0;
-};
-
-struct frame_event
-{
-    uint64_t host_boottime_ns = 0;
-    uint64_t delivery = 0;
-    std::string stream;
-    int stream_index = 0;
-    uint64_t frame_number = 0;
-    double sensor_timestamp_ms = 0.0;
-    std::string timestamp_domain;
-};
-
-struct stream_metrics
-{
-    uint64_t frames = 0;
-    uint64_t drops = 0;
-    bool has_last = false;
-    uint64_t last_frame_number = 0;
-    double last_sensor_timestamp_ms = 0.0;
-    uint64_t last_host_ns = 0;
-    std::string timestamp_domain;
-    std::vector<double> sensor_interarrival_ms;
-    std::vector<double> host_interarrival_ms;
-};
-
-struct warmup_stream_metrics
-{
-    uint64_t observed_frames = 0;
-    uint64_t duplicate_frames = 0;
-    uint64_t sequence_gaps = 0;
-    uint64_t out_of_order_frames = 0;
-    bool has_last = false;
-    uint64_t last_frame_number = 0;
-};
-
-struct camera_metrics
-{
-    std::mutex mutex;
-    uint64_t warmup_deliveries = 0;
-    uint64_t deliveries = 0;
-    uint64_t frames = 0;
-    uint64_t timeouts = 0;
-    uint64_t pre_measurement_timeouts = 0;
-    uint64_t measurement_timeouts = 0;
-    uint64_t start_begin_ns = 0;
-    uint64_t start_end_ns = 0;
-    uint64_t stop_begin_ns = 0;
-    uint64_t stop_end_ns = 0;
-    uint64_t first_warmup_ns = 0;
-    uint64_t first_measured_ns = 0;
-    uint64_t last_measured_ns = 0;
-    uint64_t last_delivery_ns = 0;
-    uint64_t warmup_health_deliveries = 0;
-    bool scheduler_ready = false;
-    bool warmed = false;
-    bool completed = false;
-    std::vector<double> delivery_interarrival_ms;
-    std::vector<double> wait_ms;
-    std::map<std::string, stream_metrics> streams;
-    std::map<std::string, warmup_stream_metrics> warmup_streams;
-    std::vector<frame_event> events;
-};
-
-struct frame_freshness_metrics
-{
-    uint64_t observed_frames = 0;
-    uint64_t unique_frames = 0;
-    uint64_t duplicate_frames = 0;
-    uint64_t sequence_gaps = 0;
-    uint64_t nonadvancing_frames = 0;
-    uint64_t out_of_order_frames = 0;
-};
-
-struct delivery_freshness_metrics
-{
-    uint64_t fully_fresh_framesets = 0;
-    uint64_t partially_stale_framesets = 0;
-    uint64_t stale_framesets = 0;
-};
-
-struct camera_freshness_metrics
-{
-    frame_freshness_metrics frames;
-    delivery_freshness_metrics deliveries;
-    std::map<std::string, frame_freshness_metrics> streams;
-};
-
 struct camera_runtime
 {
-    explicit camera_runtime(rs2::context &context) : pipe(context) {}
+    explicit camera_runtime(rs2::context &context)
+        : pipe(context), pipeline_handle(pipe)
+    {
+    }
 
     std::string serial;
     std::string name;
@@ -166,6 +93,7 @@ struct camera_runtime
     std::string physical_port;
     std::string usb_type;
     rs2::pipeline pipe;
+    std::shared_ptr<rs2_pipeline> pipeline_handle;
     rs2::config config;
     rs2::pipeline_profile profile;
     camera_metrics metrics;
@@ -341,33 +269,6 @@ options parse_args(int argc, char **argv)
     return opts;
 }
 
-std::string json_escape(const std::string &value)
-{
-    std::ostringstream out;
-    for (unsigned char c : value)
-    {
-        switch (c)
-        {
-        case '\\': out << "\\\\"; break;
-        case '"': out << "\\\""; break;
-        case '\n': out << "\\n"; break;
-        case '\r': out << "\\r"; break;
-        case '\t': out << "\\t"; break;
-        default:
-            if (c < 0x20)
-                out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
-            else
-                out << static_cast<char>(c);
-        }
-    }
-    return out.str();
-}
-
-std::string quoted(const std::string &value)
-{
-    return "\"" + json_escape(value) + "\"";
-}
-
 void set_failure(shared_control &control, const std::string &message);
 
 void write_atomic_timestamp(const std::string &path, uint64_t timestamp_ns)
@@ -436,84 +337,6 @@ uint64_t wait_for_measurement_gate(const options &opts, shared_control &control)
     return 0;
 }
 
-std::string csv_field(const std::string &value)
-{
-    if (value.find_first_of(",\"\n\r") == std::string::npos)
-        return value;
-    std::string escaped = "\"";
-    for (char c : value)
-    {
-        if (c == '"')
-            escaped += '"';
-        escaped += c;
-    }
-    return escaped + '"';
-}
-
-stats summarize(std::vector<double> values)
-{
-    stats result;
-    result.n = values.size();
-    if (values.empty())
-        return result;
-
-    std::sort(values.begin(), values.end());
-    result.min = values.front();
-    result.max = values.back();
-    double sum = 0.0;
-    for (double value : values)
-        sum += value;
-    result.mean = sum / static_cast<double>(values.size());
-    double squared = 0.0;
-    for (double value : values)
-        squared += (value - result.mean) * (value - result.mean);
-    result.stddev = std::sqrt(squared / static_cast<double>(values.size()));
-
-    auto percentile = [&](double p) {
-        if (values.size() == 1)
-            return values.front();
-        const double position = p * static_cast<double>(values.size() - 1);
-        const auto low = static_cast<size_t>(std::floor(position));
-        const auto high = static_cast<size_t>(std::ceil(position));
-        return values[low] + (values[high] - values[low]) * (position - static_cast<double>(low));
-    };
-    result.p50 = percentile(0.5);
-    result.p90 = percentile(0.9);
-    result.p99 = percentile(0.99);
-    result.p999 = percentile(0.999);
-    return result;
-}
-
-void write_stats(std::ostream &out, const stats &value)
-{
-    out << "{\"n\":" << value.n
-        << ",\"min\":" << value.min
-        << ",\"max\":" << value.max
-        << ",\"mean\":" << value.mean
-        << ",\"stddev\":" << value.stddev
-        << ",\"p50\":" << value.p50
-        << ",\"p90\":" << value.p90
-        << ",\"p99\":" << value.p99
-        << ",\"p999\":" << value.p999 << "}";
-}
-
-double ns_to_ms(uint64_t ns)
-{
-    return static_cast<double>(ns) / 1000000.0;
-}
-
-std::string info(const rs2::device &device, rs2_camera_info key)
-{
-    return device.supports(key) ? device.get_info(key) : "unknown";
-}
-
-std::string stream_key(const rs2::frame &frame)
-{
-    const auto profile = frame.get_profile();
-    return std::string(rs2_stream_to_string(profile.stream_type())) + "#" +
-           std::to_string(profile.stream_index());
-}
-
 void configure_streams(rs2::config &config, const options &opts, const std::string &serial)
 {
     config.enable_device(serial);
@@ -559,41 +382,6 @@ void set_failure(shared_control &control, const std::string &message)
     control.cv.notify_all();
 }
 
-void record_frame(camera_metrics &metrics,
-                  const rs2::frame &frame,
-                  uint64_t host_ns,
-                  uint64_t delivery)
-{
-    if (!frame)
-        return;
-
-    const std::string key = stream_key(frame);
-    auto &stream = metrics.streams[key];
-    const uint64_t number = frame.get_frame_number();
-    const double sensor_ms = frame.get_timestamp();
-    if (stream.has_last)
-    {
-        if (number > stream.last_frame_number + 1)
-            stream.drops += number - stream.last_frame_number - 1;
-        stream.sensor_interarrival_ms.push_back(sensor_ms - stream.last_sensor_timestamp_ms);
-        stream.host_interarrival_ms.push_back(ns_to_ms(host_ns - stream.last_host_ns));
-    }
-    stream.has_last = true;
-    stream.last_frame_number = number;
-    stream.last_sensor_timestamp_ms = sensor_ms;
-    stream.last_host_ns = host_ns;
-    stream.timestamp_domain = rs2_timestamp_domain_to_string(frame.get_frame_timestamp_domain());
-    ++stream.frames;
-    ++metrics.frames;
-    metrics.events.push_back({host_ns,
-                              delivery,
-                              rs2_stream_to_string(frame.get_profile().stream_type()),
-                              frame.get_profile().stream_index(),
-                              number,
-                              sensor_ms,
-                              stream.timestamp_domain});
-}
-
 bool modeled_scheduler_requested(const options &opts)
 {
     return !opts.deadline_profile.empty() ||
@@ -612,68 +400,6 @@ int scheduler_apply_threshold(const options &opts)
     return std::min(opts.fps, std::max(1, opts.warmup_frames / 10));
 }
 
-size_t expected_stream_count(const options &opts)
-{
-    if (opts.stream_mode == "depth")
-        return 1;
-    if (opts.stream_mode == "depth_color")
-        return 2;
-    if (opts.stream_mode == "d435_all")
-        return 4;
-    return 0;
-}
-
-void record_warmup_frame(camera_metrics &metrics, const rs2::frame &frame)
-{
-    if (!frame)
-        return;
-    auto &stream = metrics.warmup_streams[stream_key(frame)];
-    const uint64_t number = frame.get_frame_number();
-    if (stream.has_last)
-    {
-        if (number == stream.last_frame_number)
-            ++stream.duplicate_frames;
-        else if (number < stream.last_frame_number)
-            ++stream.out_of_order_frames;
-        else if (number > stream.last_frame_number + 1)
-            stream.sequence_gaps += number - stream.last_frame_number - 1;
-    }
-    stream.has_last = true;
-    stream.last_frame_number = number;
-    ++stream.observed_frames;
-}
-
-std::string warmup_health_error(const camera_runtime &camera, const options &opts)
-{
-    const auto &metrics = camera.metrics;
-    const size_t expected = expected_stream_count(opts);
-    if (metrics.warmup_streams.size() != expected)
-        return camera.serial + ": warm-up freshness expected " +
-               std::to_string(expected) + " streams but observed " +
-               std::to_string(metrics.warmup_streams.size());
-
-    for (const auto &[key, stream] : metrics.warmup_streams)
-    {
-        const bool missing_from_framesets =
-            opts.delivery == "wait" &&
-            stream.observed_frames != metrics.warmup_health_deliveries;
-        if (stream.observed_frames < 2 || missing_from_framesets ||
-            stream.duplicate_frames || stream.sequence_gaps ||
-            stream.out_of_order_frames)
-        {
-            std::ostringstream message;
-            message << camera.serial << ": warm-up freshness failed for " << key
-                    << " (window_deliveries=" << metrics.warmup_health_deliveries
-                    << ", observed=" << stream.observed_frames
-                    << ", duplicates=" << stream.duplicate_frames
-                    << ", gaps=" << stream.sequence_gaps
-                    << ", out_of_order=" << stream.out_of_order_frames << ")";
-            return message.str();
-        }
-    }
-    return "";
-}
-
 void record_delivery(camera_runtime &camera,
                      const rs2::frame &frame,
                      uint64_t host_ns,
@@ -685,6 +411,7 @@ void record_delivery(camera_runtime &camera,
     bool became_warm = false;
     bool became_complete = false;
     std::string health_error;
+    std::string storage_error;
     {
         std::lock_guard<std::mutex> lock(camera.metrics.mutex);
         auto &metrics = camera.metrics;
@@ -707,10 +434,18 @@ void record_delivery(camera_runtime &camera,
                 if (frame.is<rs2::frameset>())
                 {
                     for (auto &&child : frame.as<rs2::frameset>())
-                        record_warmup_frame(metrics, child);
+                    {
+                        const std::string error = record_warmup_frame(metrics, child);
+                        if (health_error.empty() && !error.empty())
+                            health_error = camera.serial + ": " + error;
+                    }
                 }
                 else
-                    record_warmup_frame(metrics, frame);
+                {
+                    const std::string error = record_warmup_frame(metrics, frame);
+                    if (!error.empty())
+                        health_error = camera.serial + ": " + error;
+                }
             }
             if (modeled_scheduler_requested(opts) && !metrics.scheduler_ready &&
                 metrics.warmup_deliveries >=
@@ -721,7 +456,14 @@ void record_delivery(camera_runtime &camera,
             }
             if (metrics.warmup_deliveries >= static_cast<uint64_t>(opts.warmup_frames))
             {
-                health_error = warmup_health_error(camera, opts);
+                if (health_error.empty())
+                {
+                    health_error = warmup_health_error(
+                        metrics,
+                        camera.serial,
+                        expected_stream_count(opts.stream_mode),
+                        opts.delivery == "wait");
+                }
                 if (health_error.empty())
                 {
                     metrics.warmed = true;
@@ -738,20 +480,37 @@ void record_delivery(camera_runtime &camera,
             if (!metrics.first_measured_ns)
                 metrics.first_measured_ns = host_ns;
             if (metrics.last_delivery_ns)
-                metrics.delivery_interarrival_ms.push_back(
-                    ns_to_ms(host_ns - metrics.last_delivery_ns));
+            {
+                if (metrics.delivery_interarrival_ms.size() >=
+                    metrics.delivery_interarrival_ms.capacity())
+                    storage_error = "Preallocated delivery interval capacity exhausted";
+                else
+                    metrics.delivery_interarrival_ms.push_back(
+                        ns_to_ms(host_ns - metrics.last_delivery_ns));
+            }
             metrics.last_delivery_ns = host_ns;
             metrics.last_measured_ns = host_ns;
             if (wait_ms >= 0.0)
-                metrics.wait_ms.push_back(wait_ms);
+            {
+                if (metrics.wait_ms.size() >= metrics.wait_ms.capacity())
+                    storage_error = "Preallocated wait sample capacity exhausted";
+                else
+                    metrics.wait_ms.push_back(wait_ms);
+            }
 
-            if (frame.is<rs2::frameset>())
+            if (storage_error.empty() && frame.is<rs2::frameset>())
             {
                 for (auto &&child : frame.as<rs2::frameset>())
-                    record_frame(metrics, child, host_ns, metrics.deliveries);
+                {
+                    storage_error = record_measured_frame(
+                        metrics, child, host_ns, metrics.deliveries);
+                    if (!storage_error.empty())
+                        break;
+                }
             }
-            else
-                record_frame(metrics, frame, host_ns, metrics.deliveries);
+            else if (storage_error.empty())
+                storage_error = record_measured_frame(
+                    metrics, frame, host_ns, metrics.deliveries);
 
             if (!fixed_duration_measurement(opts) &&
                 metrics.deliveries >= static_cast<uint64_t>(opts.frames))
@@ -765,6 +524,13 @@ void record_delivery(camera_runtime &camera,
     if (!health_error.empty())
     {
         set_failure(control, "Warm-up freshness check failed: " + health_error);
+        return;
+    }
+    if (!storage_error.empty())
+    {
+        set_failure(
+            control,
+            "Measurement storage failure for " + camera.serial + ": " + storage_error);
         return;
     }
 
@@ -799,38 +565,46 @@ void wait_loop(camera_runtime &camera,
     {
         const bool measurement_was_enabled = control.measurement_enabled.load();
         const uint64_t begin_ns = rs_trace_boottime_ns();
-        try
+        auto wait_result = wait_for_pipeline_frame(
+            camera.pipeline_handle.get(),
+            static_cast<unsigned int>(opts.frame_timeout_ms));
+        const uint64_t end_ns = rs_trace_boottime_ns();
+        if (wait_result)
         {
-            const auto frames = camera.pipe.wait_for_frames(opts.frame_timeout_ms);
-            const uint64_t end_ns = rs_trace_boottime_ns();
             record_delivery(
-                camera, frames, end_ns, ns_to_ms(end_ns - begin_ns), opts, control);
+                camera,
+                wait_result.frame,
+                end_ns,
+                ns_to_ms(end_ns - begin_ns),
+                opts,
+                control);
             std::lock_guard<std::mutex> lock(camera.metrics.mutex);
             if (camera.metrics.completed)
                 break;
+            continue;
         }
-        catch (const rs2::error &error)
+
         {
-            {
-                std::lock_guard<std::mutex> lock(camera.metrics.mutex);
-                ++camera.metrics.timeouts;
-                if (measurement_was_enabled)
-                    ++camera.metrics.measurement_timeouts;
-                else
-                    ++camera.metrics.pre_measurement_timeouts;
-            }
+            std::lock_guard<std::mutex> lock(camera.metrics.mutex);
+            ++camera.metrics.timeouts;
             if (measurement_was_enabled)
-            {
-                if (!control.measurement_enabled.load() || control.stop.load())
-                    break;
-                continue;
-            }
-            const std::string prefix = control.noise_transition_active.load()
-                                           ? "Noise transition frame failure: "
-                                           : "";
-            set_failure(control, prefix + camera.serial + ": " + error.what());
-            break;
+                ++camera.metrics.measurement_timeouts;
+            else
+                ++camera.metrics.pre_measurement_timeouts;
         }
+        if (measurement_was_enabled)
+        {
+            if (!control.measurement_enabled.load() || control.stop.load())
+                break;
+            continue;
+        }
+        if (control.stop.load() && control.failed.load())
+            break;
+        const std::string prefix = control.noise_transition_active.load()
+                                       ? "Noise transition frame failure: "
+                                       : "";
+        set_failure(control, prefix + camera.serial + ": " + wait_result.error);
+        break;
     }
 }
 
@@ -873,129 +647,6 @@ std::string scheduler_policy()
 #endif
     default: return "UNKNOWN";
     }
-}
-
-uint64_t total_drops(const camera_metrics &metrics)
-{
-    uint64_t result = 0;
-    for (const auto &entry : metrics.streams)
-        result += entry.second.drops;
-    return result;
-}
-
-camera_freshness_metrics analyze_freshness(const camera_metrics &metrics)
-{
-    struct working_stream
-    {
-        bool has_highest = false;
-        uint64_t highest = 0;
-        uint64_t nonadvancing_frames = 0;
-        uint64_t out_of_order_frames = 0;
-        std::vector<uint64_t> frame_numbers;
-    };
-
-    camera_freshness_metrics result;
-    std::map<std::string, working_stream> streams;
-    bool have_delivery = false;
-    uint64_t current_delivery = 0;
-    bool delivery_has_frame = false;
-    bool delivery_has_advance = false;
-    bool delivery_all_advance = true;
-
-    auto finish_delivery = [&]() {
-        if (!delivery_has_frame)
-            return;
-        if (!delivery_has_advance)
-            ++result.deliveries.stale_framesets;
-        else if (delivery_all_advance)
-            ++result.deliveries.fully_fresh_framesets;
-        else
-            ++result.deliveries.partially_stale_framesets;
-    };
-
-    for (const auto &event : metrics.events)
-    {
-        if (!have_delivery || event.delivery != current_delivery)
-        {
-            if (have_delivery)
-                finish_delivery();
-            have_delivery = true;
-            current_delivery = event.delivery;
-            delivery_has_frame = false;
-            delivery_has_advance = false;
-            delivery_all_advance = true;
-        }
-
-        const std::string key = event.stream + "#" + std::to_string(event.stream_index);
-        auto &stream = streams[key];
-        const bool advanced = !stream.has_highest || event.frame_number > stream.highest;
-        if (advanced)
-        {
-            stream.has_highest = true;
-            stream.highest = event.frame_number;
-        }
-        else
-        {
-            ++stream.nonadvancing_frames;
-            if (event.frame_number < stream.highest)
-                ++stream.out_of_order_frames;
-        }
-        stream.frame_numbers.push_back(event.frame_number);
-        delivery_has_frame = true;
-        delivery_has_advance = delivery_has_advance || advanced;
-        delivery_all_advance = delivery_all_advance && advanced;
-    }
-    if (have_delivery)
-        finish_delivery();
-
-    for (auto &entry : streams)
-    {
-        auto &working = entry.second;
-        auto &numbers = working.frame_numbers;
-        std::sort(numbers.begin(), numbers.end());
-        const auto unique_end = std::unique(numbers.begin(), numbers.end());
-        const uint64_t observed = numbers.size();
-        const uint64_t unique = static_cast<uint64_t>(
-            std::distance(numbers.begin(), unique_end));
-
-        frame_freshness_metrics stream_result;
-        stream_result.observed_frames = observed;
-        stream_result.unique_frames = unique;
-        stream_result.duplicate_frames = observed - unique;
-        stream_result.nonadvancing_frames = working.nonadvancing_frames;
-        stream_result.out_of_order_frames = working.out_of_order_frames;
-        if (unique > 0)
-        {
-            const uint64_t minimum = numbers.front();
-            const uint64_t maximum = *(unique_end - 1);
-            stream_result.sequence_gaps = maximum - minimum + 1 - unique;
-        }
-        result.streams.emplace(entry.first, stream_result);
-
-        result.frames.observed_frames += stream_result.observed_frames;
-        result.frames.unique_frames += stream_result.unique_frames;
-        result.frames.duplicate_frames += stream_result.duplicate_frames;
-        result.frames.sequence_gaps += stream_result.sequence_gaps;
-        result.frames.nonadvancing_frames += stream_result.nonadvancing_frames;
-        result.frames.out_of_order_frames += stream_result.out_of_order_frames;
-    }
-    return result;
-}
-
-void add_freshness(camera_freshness_metrics &destination,
-                   const camera_freshness_metrics &source)
-{
-    destination.frames.observed_frames += source.frames.observed_frames;
-    destination.frames.unique_frames += source.frames.unique_frames;
-    destination.frames.duplicate_frames += source.frames.duplicate_frames;
-    destination.frames.sequence_gaps += source.frames.sequence_gaps;
-    destination.frames.nonadvancing_frames += source.frames.nonadvancing_frames;
-    destination.frames.out_of_order_frames += source.frames.out_of_order_frames;
-    destination.deliveries.fully_fresh_framesets +=
-        source.deliveries.fully_fresh_framesets;
-    destination.deliveries.partially_stale_framesets +=
-        source.deliveries.partially_stale_framesets;
-    destination.deliveries.stale_framesets += source.deliveries.stale_framesets;
 }
 
 void write_frame_freshness(std::ostream &out, const frame_freshness_metrics &metrics)
@@ -1101,7 +752,7 @@ void write_summary(const std::string &path,
     sched_param parameter{};
     sched_getparam(0, &parameter);
     out << "{\n"
-        << "  \"schema_version\": 7,\n"
+        << "  \"schema_version\": 8,\n"
         << "  \"success\": " << (success ? "true" : "false") << ",\n"
         << "  \"error\": " << quoted(error) << ",\n"
         << "  \"scheduler\": {\"policy\":" << quoted(scheduler_policy())
@@ -1141,7 +792,8 @@ void write_summary(const std::string &path,
         << (opts.deadline_profile.empty() ? 0 : scheduler_apply_threshold(opts))
         << ",\"fps\":" << opts.fps
         << ",\"frame_timeout_ms\":" << opts.frame_timeout_ms
-        << ",\"startup_timeout_ms\":" << opts.startup_timeout_ms << "},\n"
+        << ",\"startup_timeout_ms\":" << opts.startup_timeout_ms
+        << ",\"fixed_event_storage\":true},\n"
         << "  \"transition\": {\"noise_gate_enabled\":"
         << (!opts.measurement_start_gate.empty() ? "true" : "false")
         << ",\"warmup_ready_boottime_ns\":" << warmup_ready_ns
@@ -1172,9 +824,9 @@ void write_summary(const std::string &path,
     out << ",";
     write_delivery_freshness(out, aggregate_freshness.deliveries);
     out << ",\"delivery_interarrival_ms\":";
-    write_stats(out, summarize(delivery_gaps));
+    write_stats_json(out, summarize(delivery_gaps));
     out << ",\"wait_ms\":";
-    write_stats(out, summarize(wait_times));
+    write_stats_json(out, summarize(wait_times));
     out << "},\n  \"cameras\": [";
 
     for (size_t i = 0; i < cameras.size(); ++i)
@@ -1221,6 +873,13 @@ void write_summary(const std::string &path,
             << ",\"timeouts\":" << metrics.timeouts
             << ",\"pre_measurement_timeouts\":" << metrics.pre_measurement_timeouts
             << ",\"measurement_timeouts\":" << metrics.measurement_timeouts
+            << ",\"storage\":{\"delivery_capacity\":"
+            << metrics.storage.delivery_capacity
+            << ",\"event_capacity\":" << metrics.storage.event_capacity
+            << ",\"stream_sample_capacity\":"
+            << metrics.storage.stream_sample_capacity
+            << ",\"allocated_event_capacity\":" << metrics.events.capacity()
+            << "}"
             << ",";
         write_frame_freshness(out, freshness.frames);
         out << ",";
@@ -1230,9 +889,9 @@ void write_summary(const std::string &path,
             << ",\"first_measured_boottime_ns\":" << metrics.first_measured_ns
             << ",\"last_measured_boottime_ns\":" << metrics.last_measured_ns
             << ",\"delivery_interarrival_ms\":";
-        write_stats(out, summarize(metrics.delivery_interarrival_ms));
+        write_stats_json(out, summarize(metrics.delivery_interarrival_ms));
         out << ",\"wait_ms\":";
-        write_stats(out, summarize(metrics.wait_ms));
+        write_stats_json(out, summarize(metrics.wait_ms));
         out << ",\"active_streams\":";
         write_active_streams(out, camera->profile);
         out << ",\"streams\":{";
@@ -1252,11 +911,12 @@ void write_summary(const std::string &path,
                 << ",\"drops\":" << stream.drops
                 << ",";
             write_frame_freshness(out, stream_freshness);
-            out << ",\"timestamp_domain\":" << quoted(stream.timestamp_domain)
+            out << ",\"timestamp_domain\":"
+                << quoted(rs2_timestamp_domain_to_string(stream.timestamp_domain))
                 << ",\"sensor_interarrival_ms\":";
-            write_stats(out, summarize(stream.sensor_interarrival_ms));
+            write_stats_json(out, summarize(stream.sensor_interarrival_ms));
             out << ",\"host_interarrival_ms\":";
-            write_stats(out, summarize(stream.host_interarrival_ms));
+            write_stats_json(out, summarize(stream.host_interarrival_ms));
             out << "}";
         }
         out << "}}";
@@ -1281,9 +941,11 @@ void write_events(const std::string &path,
         for (const auto &event : camera->metrics.events)
         {
             out << i << "," << csv_field(camera->serial) << "," << event.delivery << ","
-                << csv_field(event.stream) << "," << event.stream_index << ","
+                << csv_field(rs2_stream_to_string(event.stream)) << ","
+                << event.stream_index << ","
                 << event.frame_number << "," << event.sensor_timestamp_ms << ","
-                << csv_field(event.timestamp_domain) << "," << event.host_boottime_ns << ","
+                << csv_field(rs2_timestamp_domain_to_string(event.timestamp_domain))
+                << "," << event.host_boottime_ns << ","
                 << (event.host_boottime_ns >= origin_ns
                         ? ns_to_ms(event.host_boottime_ns - origin_ns)
                         : 0.0)
@@ -1310,6 +972,12 @@ try
     rs_trace_phase_marker("after_context");
     const auto serials = select_serials(context, opts);
     rs_trace_phase_marker("after_device_selection");
+    const auto event_storage_plan = make_storage_plan(
+        opts.frames,
+        opts.measurement_duration_ms,
+        opts.fps,
+        expected_stream_count(opts.stream_mode),
+        opts.delivery == "callback");
 
     std::vector<std::unique_ptr<camera_runtime>> cameras;
     shared_control control;
@@ -1318,9 +986,11 @@ try
     {
         auto camera = std::make_unique<camera_runtime>(context);
         camera->serial = serial;
+        prepare_camera_metrics(camera->metrics, opts.stream_mode, event_storage_plan);
         configure_streams(camera->config, opts, serial);
         cameras.emplace_back(std::move(camera));
     }
+    rs_trace_phase_marker("after_event_storage_allocation");
 
     rs_trace_phase_marker("before_pipeline_start");
     for (size_t i = 0; i < cameras.size(); ++i)
@@ -1337,10 +1007,10 @@ try
             camera.profile = camera.pipe.start(camera.config);
         camera.metrics.start_end_ns = rs_trace_boottime_ns();
         const auto device = camera.profile.get_device();
-        camera.name = info(device, RS2_CAMERA_INFO_NAME);
-        camera.firmware = info(device, RS2_CAMERA_INFO_FIRMWARE_VERSION);
-        camera.physical_port = info(device, RS2_CAMERA_INFO_PHYSICAL_PORT);
-        camera.usb_type = info(device, RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+        camera.name = device_info(device, RS2_CAMERA_INFO_NAME);
+        camera.firmware = device_info(device, RS2_CAMERA_INFO_FIRMWARE_VERSION);
+        camera.physical_port = device_info(device, RS2_CAMERA_INFO_PHYSICAL_PORT);
+        camera.usb_type = device_info(device, RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
     }
     rs_trace_phase_marker("after_pipeline_start");
 

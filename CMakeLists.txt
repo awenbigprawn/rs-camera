@@ -50,6 +50,13 @@ endif()
 add_executable(smallest_test src/smallest_test.cpp)
 add_executable(d435_sensor_probe src/d435_sensor_probe.cpp)
 add_executable(realsense_thread_lifecycle_probe src/realsense_thread_lifecycle_probe.cpp)
+add_library(
+    rs_camera_probe_support
+    STATIC
+        src/benchmark_utils.cpp
+        src/realsense_utils.cpp
+        src/steady_metrics.cpp
+)
 add_executable(
     realsense_steady_probe
     src/realsense_steady_probe.cpp
@@ -59,9 +66,21 @@ add_executable(
 target_compile_features(smallest_test PRIVATE cxx_std_17)
 target_compile_features(d435_sensor_probe PRIVATE cxx_std_17)
 target_compile_features(realsense_thread_lifecycle_probe PRIVATE cxx_std_17)
+target_compile_features(rs_camera_probe_support PUBLIC cxx_std_17)
 target_compile_features(realsense_steady_probe PRIVATE cxx_std_17)
 
 target_include_directories(
+    rs_camera_probe_support
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+    rs_camera_probe_support
+    PUBLIC
+        "${RS_CAMERA_LIBREALSENSE_TARGET}"
+)
+
+target_include_directories(
     smallest_test
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -103,6 +122,7 @@ target_link_libraries(
 target_link_libraries(
     realsense_steady_probe
     PRIVATE
+        rs_camera_probe_support
         "${RS_CAMERA_LIBREALSENSE_TARGET}"
         Threads::Threads
         ${CMAKE_DL_LIBS}
