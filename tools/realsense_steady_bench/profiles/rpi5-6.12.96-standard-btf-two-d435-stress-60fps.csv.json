@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "status": "validated_for_steady_state",
+  "profile": "rpi5-6.12.96-standard-btf-two-d435-stress-60fps.csv",
+  "profile_sha256": "fcfb65ee16186cded19fe3c1614b49a9af533a3f32f20708b2f926c188322fde",
+  "source_commit": "a047e6f8aa705a0f07a01610be72bd3a33dc1fa9",
+  "platform": {
+    "machine": "Raspberry Pi 5",
+    "kernel": "6.12.96-rpi5-standard-btf+",
+    "benchmark_cpus": "1-3",
+    "housekeeping_and_xhci_irq_cpu": "0",
+    "cpu_frequency_mhz": 1500,
+    "backend": "V4L2",
+    "usb_kernel_driver": "uvcvideo"
+  },
+  "software": {
+    "librealsense_version": "2.58.3",
+    "camera_firmware": "5.17.3.10"
+  },
+  "workload": {
+    "camera_model": "D435",
+    "camera_count": 2,
+    "delivery": "wait",
+    "stream_mode": "d435_all",
+    "fps": 60,
+    "depth": "848x480 Z16",
+    "infrared_1": "848x480 Y8",
+    "infrared_2": "848x480 Y8",
+    "color": "960x540 RGB8",
+    "warmup_deliveries_per_camera": 600,
+    "noise": "none"
+  },
+  "reservation": {
+    "profile_entries": 23,
+    "main_thread_policy": "SCHED_OTHER",
+    "worker_policy": "SCHED_DEADLINE",
+    "runtime_formula": "max(base_runtime_ns, 200000, ceil(1.20 * first_deadline_validation_execution_max_ns))",
+    "deadline_and_period": "unchanged from the base SCHED_OTHER-derived profile",
+    "total_reserved_cpu_utilization": 1.2949693481040463,
+    "average_reserved_utilization_across_three_benchmark_cpus": 0.43165644936801545
+  },
+  "provenance": {
+    "base_profile_sha256": "f11da0ab450695480dbed1704654e935815e3e4c85004ac2776327c54547c7de",
+    "refinement_trace_summary_sha256": "73ff030f7e21edf67fd672a765b276fa23f2177ffb384b9d7a3c8e6ac1e5011c",
+    "validation_steady_summary_sha256": "8090d2ce8703a6f4cab1816fe8d98b242dbb95104662d6df0de87e7543cb0ac9",
+    "validation_thread_summary_sha256": "0a3a2f8e94cf45f1077d0ef69a0eb2e2502e1149aca666c3e42a0afc7e4cb692"
+  },
+  "validation": {
+    "date": "2026-08-06",
+    "duration_seconds": 600.001953282,
+    "assigned_workers": 23,
+    "unassigned_workers": 0,
+    "partial_profile": false,
+    "measurement_timeouts": 0,
+    "maximum_observed_execution_to_runtime_ratio": 0.871,
+    "process_wide_overrun_signals": 2,
+    "steady_window_signal_return_events": 0,
+    "post_steady_signal_return_events": 2,
+    "scope_note": "Both overrun signals were observed after steady_state_end during camera stop and resource destruction. Teardown is outside this steady-state profile's validation scope."
+  }
+}

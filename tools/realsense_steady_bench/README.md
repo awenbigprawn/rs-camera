@@ -290,6 +290,23 @@ raw micro-gap inside a burst. The accompanying WORKLOAD.csv.json records all
 observations, clamping, formula constants, sources, and total reserved
 utilization. These are empirical reservation candidates, not WCET guarantees.
 
+### Stored validated profile
+
+`profiles/rpi5-6.12.96-standard-btf-two-d435-stress-60fps.csv` is the stored
+steady-state profile for the Raspberry Pi 5 standard BTF kernel, two D435
+cameras, and the 60 FPS all-stream stress workload. It was validated for one
+600-second steady window with all 23 workers assigned, no measurement timeout,
+and every observed steady-state activation below its runtime reservation. Its
+total reserved utilization is 1.29497 CPU equivalents, or 43.17 percent of the
+three-CPU benchmark partition. The sidecar JSON records the exact platform,
+workload, derivation, checksums, and validation scope.
+
+The validation process reported two SIGXCPU events after `steady_state_end`
+during camera stop and resource destruction. Teardown is explicitly outside
+this steady-state profile's scope. Do not reuse this profile with a different
+kernel, librealsense build, camera count, stream setup, or backend; regenerate
+and revalidate it instead.
+
 Run the matching workload with the generated profile:
 
 ~~~sh
