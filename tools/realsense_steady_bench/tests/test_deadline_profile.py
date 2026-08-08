@@ -209,6 +209,46 @@ class DeadlineProfileModelTest(unittest.TestCase):
         self.assertEqual(metadata["excluded_thread_count"], 1)
         self.assertEqual(metadata["excluded_threads"][0]["signature"], slow[0])
 
+    def test_profile_shares_worst_case_parameters_across_role_instances(self):
+        signature = "entry=capture@0x1|lib.so@0x2"
+        first = (signature, 1)
+        second = (signature, 2)
+        threads = {
+            first: {
+                "name": "capture",
+                "execution_ns": 500_000,
+                "period_ns": 32_000_000,
+            },
+            second: {
+                "name": "capture",
+                "execution_ns": 600_000,
+                "period_ns": 30_000_000,
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "generate_deadline_profile._trace_threads",
+            return_value=(threads, {"input": "one"}),
+        ):
+            output = Path(directory) / "profile.csv"
+            metadata = generate_profile(
+                trace_runs=[Path("one")],
+                output=output,
+                runtime_margin=1.20,
+                period_scale=0.91,
+                minimum_runtime_us=100,
+                maximum_period_us=4_194_304,
+            )
+            with output.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual([int(row["instance"]) for row in rows], [1, 2])
+        self.assertEqual({int(row["runtime_ns"]) for row in rows}, {720_000})
+        self.assertEqual({int(row["period_ns"]) for row in rows}, {27_300_000})
+        self.assertTrue(metadata["shared_parameters_per_thread_signature"])
+        self.assertTrue(
+            all(thread["role_instance_count"] == 2 for thread in metadata["threads"])
+        )
+
     def test_deadline_policy_starts_process_as_sched_other(self):
         self.assertEqual(scheduler_prefix("deadline", 80), ["chrt", "--other", "0"])
 

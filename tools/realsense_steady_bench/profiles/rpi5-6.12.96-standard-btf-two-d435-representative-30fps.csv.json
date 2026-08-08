@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "status": "validated_for_steady_state",
+  "profile": "rpi5-6.12.96-standard-btf-two-d435-representative-30fps.csv",
+  "profile_sha256": "d528fa6f9b7051a02d858fffac0f4c8488920bac5ef9df21733fdc6004f39d2b",
+  "source_commit": "f876ffcbfb953aef8b075106d341b6a2f652cd5f",
+  "platform": {
+    "machine": "Raspberry Pi 5",
+    "kernel": "6.12.96-rpi5-standard-btf+",
+    "benchmark_cpus": "1-3",
+    "housekeeping_and_xhci_irq_cpu": "0",
+    "cpu_frequency_mhz": 1500,
+    "backend": "V4L2",
+    "usb_kernel_driver": "uvcvideo"
+  },
+  "software": {
+    "librealsense_version": "2.58.3",
+    "camera_firmware": "5.17.3.10",
+    "v4l2_diagnostics_build": true
+  },
+  "workload": {
+    "camera_model": "D435",
+    "camera_count": 2,
+    "delivery": "wait",
+    "stream_mode": "depth_color",
+    "fps": 30,
+    "depth": "848x480 Z16",
+    "color": "640x480 RGB8",
+    "infrared": "disabled",
+    "warmup_deliveries_per_camera": 300,
+    "noise": "none"
+  },
+  "reservation": {
+    "profile_entries": 21,
+    "main_thread_policy": "SCHED_OTHER",
+    "worker_policy": "SCHED_DEADLINE",
+    "runtime_formula": "ceil(1.20 * role-wide SCHED_OTHER execution maximum); time_diff_keeper refined to 372755 ns from the first 10-minute Deadline validation",
+    "deadline_and_period": "0.91 times the role-wide minimum stable period",
+    "shared_parameters_per_thread_signature": true,
+    "total_reserved_cpu_utilization": 0.187868802,
+    "average_reserved_utilization_across_three_benchmark_cpus": 0.062622934
+  },
+  "provenance": {
+    "role_normalized_base_profile_sha256": "5c2eb61e2a59f7633e322fd32155523ca6dd22c887c60cfbf1aabf9b4e9821a5",
+    "first_validation_steady_summary_sha256": "cdfd5369822450374deea974320b42b26d33863b562e81bbdd878138d75a56ed",
+    "validation_steady_summary_sha256": "d2409e18f32d14d160fcccd99e7d6222082fa9b4c68423f68e5f97099583efc2",
+    "validation_thread_summary_sha256": "36350ea062fbc2452127ff7d8a9a5574c46557015a07d7e442d7da3b515f8d15",
+    "validation_overrun_summary_sha256": "6a606d14cae059498bd9585756e60efdb3aacce919ee1c29d9794e5494f5b55e"
+  },
+  "validation": {
+    "date": "2026-08-06",
+    "duration_seconds": 600.000072999,
+    "assigned_workers": 21,
+    "unassigned_workers": 0,
+    "partial_profile": false,
+    "measurement_timeouts": 0,
+    "duplicate_frames": 8,
+    "sequence_gaps": 10,
+    "out_of_order_frames": 0,
+    "steady_deadline_runtime_exhaustions": 0,
+    "steady_sigxcpu_events": 0,
+    "post_steady_deadline_runtime_exhaustions": 5,
+    "time_diff_keeper_runtime_ns": 372755,
+    "time_diff_keeper_maximum_observed_execution_ns": 278796,
+    "time_diff_keeper_maximum_execution_to_runtime_ratio": 0.747933629,
+    "scope_note": "All five runtime exhaustions were observed after steady_state_end during camera stop and resource destruction. Teardown is outside this steady-state profile's validation scope."
+  }
+}

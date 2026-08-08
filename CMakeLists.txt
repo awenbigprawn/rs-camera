@@ -12,6 +12,18 @@ option(
     "Build the pinned ncnn MobileNetV2 Vulkan GPU-noise workload"
     OFF
 )
+option(
+    RS_CAMERA_V4L2_DIAGNOSTICS
+    "Compile the low-overhead V4L2 stage diagnostic trace into vendored librealsense"
+    OFF
+)
+
+if(RS_CAMERA_USE_SYSTEM_LIBREALSENSE AND RS_CAMERA_V4L2_DIAGNOSTICS)
+    message(
+        FATAL_ERROR
+        "RS_CAMERA_V4L2_DIAGNOSTICS requires the vendored librealsense build"
+    )
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -44,6 +56,12 @@ else()
     set(CHECK_FOR_UPDATES OFF CACHE BOOL "")
 
     add_subdirectory(deps/librealsense EXCLUDE_FROM_ALL)
+    if(RS_CAMERA_V4L2_DIAGNOSTICS)
+        target_compile_definitions(
+            realsense2
+            PRIVATE RS_CAMERA_V4L2_DIAGNOSTICS=1
+        )
+    endif()
     set(RS_CAMERA_LIBREALSENSE_TARGET realsense2)
 endif()
 

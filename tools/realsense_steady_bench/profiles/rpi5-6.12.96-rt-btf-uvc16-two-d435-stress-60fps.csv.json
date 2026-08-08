@@ -1,0 +1,1179 @@
+{
+  "excluded_thread_count": 0,
+  "excluded_threads": [],
+  "formula": {
+    "deadline": "min(kernel_maximum, floor(period_scale * role_min_stable_logical_period_across_runs_and_instances))",
+    "period": "deadline",
+    "runtime": "max(kernel_minimum, ceil(runtime_margin * role_max_logical_job_execution_across_runs_and_instances))"
+  },
+  "maximum_modeled_period_us": null,
+  "maximum_period_us": 4194304,
+  "minimum_runtime_us": 100,
+  "period_scale": 0.91,
+  "profile": "/home/safebot/program/rs-camera/tools/realsense_steady_bench/profiles/rpi5-6.12.96-rt-btf-uvc16-two-d435-stress-60fps.csv",
+  "runtime_margin": 1.2,
+  "schema_version": 1,
+  "shared_parameters_per_thread_signature": true,
+  "source_thread_count": 23,
+  "sources": [
+    {
+      "attempt": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep1_enospc_raw/benchmark_rpi5-realsense_realsense_steady_20260806_235147_547119/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "duration_ms": 600000.100022,
+      "input": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep1_enospc_raw/benchmark_rpi5-realsense_realsense_steady_20260806_235147_547119/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "lifecycle_sha256": "a40c2a5cf7cb9fea3d823eb3b073d7267a210ec6ede2b2e9864abc47157197e2",
+      "steady_begin_ns": 3060133169069,
+      "steady_end_ns": 3660133269091,
+      "thread_count": 23
+    },
+    {
+      "attempt": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep2/benchmark_rpi5-realsense_realsense_steady_20260807_000840_703200/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "duration_ms": 600000.458649,
+      "input": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep2/benchmark_rpi5-realsense_realsense_steady_20260807_000840_703200/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "lifecycle_sha256": "1f3b051f7e553f4fe4750d09997a4ad9a5bafc0c484619faa5ddb4aec1a72394",
+      "steady_begin_ns": 4073268360354,
+      "steady_end_ns": 4673268819003,
+      "thread_count": 23
+    },
+    {
+      "attempt": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep3/benchmark_rpi5-realsense_realsense_steady_20260807_002102_090323/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "duration_ms": 600000.633444,
+      "input": "/home/safebot/program/rs-camera/results/rt_uvc16/other_calibration_stress_60fps/rep3/benchmark_rpi5-realsense_realsense_steady_20260807_002102_090323/case_id-stress_all_streams_60fps_10min/policy-other/cpu_noise-none/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1",
+      "lifecycle_sha256": "f55329d1fb1f4d634011640ccb03091ecaaeed449c6956066a07eef7d345c220",
+      "steady_begin_ns": 4814598098558,
+      "steady_end_ns": 5414598732002,
+      "thread_count": 23
+    }
+  ],
+  "thread_count": 23,
+  "threads": [
+    {
+      "deadline_ns": 12229092,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 48853,
+          "burst_threshold_ns": 6537549.749832272,
+          "execution_ns": 611004,
+          "logical_job_count": 35715,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16715120
+        },
+        {
+          "activation_count": 51134,
+          "burst_threshold_ns": 6170133.322113064,
+          "execution_ns": 636918,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16672951
+        },
+        {
+          "activation_count": 51387,
+          "burst_threshold_ns": 6038673.115306706,
+          "execution_ns": 690144,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16707430
+        }
+      ],
+      "observed_execution_max_ns": 690144,
+      "observed_logical_period_min_ns": 16672951,
+      "period_ns": 12229092,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 4,
+      "role_observed_execution_max_ns": 1486205,
+      "role_observed_logical_period_min_ns": 13438563,
+      "runtime_ns": 1783446,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x40ca04|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x41d980",
+      "utilization": 0.14583633846241406
+    },
+    {
+      "deadline_ns": 12229092,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 40424,
+          "burst_threshold_ns": 4822460.90910958,
+          "execution_ns": 1372324,
+          "logical_job_count": 35715,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16691539
+        },
+        {
+          "activation_count": 41921,
+          "burst_threshold_ns": 4841793.625355794,
+          "execution_ns": 1371114,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16645233
+        },
+        {
+          "activation_count": 42190,
+          "burst_threshold_ns": 785431.3513987075,
+          "execution_ns": 1420822,
+          "logical_job_count": 35724,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 13955704
+        }
+      ],
+      "observed_execution_max_ns": 1420822,
+      "observed_logical_period_min_ns": 13955704,
+      "period_ns": 12229092,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 4,
+      "role_observed_execution_max_ns": 1486205,
+      "role_observed_logical_period_min_ns": 13438563,
+      "runtime_ns": 1783446,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x40ca04|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x41d980",
+      "utilization": 0.14583633846241406
+    },
+    {
+      "deadline_ns": 12229092,
+      "instance": 3,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 59179,
+          "burst_threshold_ns": 6157309.682901941,
+          "execution_ns": 629839,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16679443
+        },
+        {
+          "activation_count": 67253,
+          "burst_threshold_ns": 6279564.74374984,
+          "execution_ns": 641317,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16661170
+        },
+        {
+          "activation_count": 43317,
+          "burst_threshold_ns": 6627616.085814869,
+          "execution_ns": 661796,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16697292
+        }
+      ],
+      "observed_execution_max_ns": 661796,
+      "observed_logical_period_min_ns": 16661170,
+      "period_ns": 12229092,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 4,
+      "role_observed_execution_max_ns": 1486205,
+      "role_observed_logical_period_min_ns": 13438563,
+      "runtime_ns": 1783446,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x40ca04|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x41d980",
+      "utilization": 0.14583633846241406
+    },
+    {
+      "deadline_ns": 12229092,
+      "instance": 4,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 43617,
+          "burst_threshold_ns": 5079066.013428059,
+          "execution_ns": 1469642,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16722210
+        },
+        {
+          "activation_count": 44158,
+          "burst_threshold_ns": 3798501.9029167276,
+          "execution_ns": 1486205,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16706419
+        },
+        {
+          "activation_count": 37601,
+          "burst_threshold_ns": null,
+          "execution_ns": 1370421,
+          "logical_job_count": 37601,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 13438563
+        }
+      ],
+      "observed_execution_max_ns": 1486205,
+      "observed_logical_period_min_ns": 13438563,
+      "period_ns": 12229092,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 4,
+      "role_observed_execution_max_ns": 1486205,
+      "role_observed_logical_period_min_ns": 13438563,
+      "runtime_ns": 1783446,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x40ca04|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x41d980",
+      "utilization": 0.14583633846241406
+    },
+    {
+      "deadline_ns": 12470306,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 41613,
+          "burst_threshold_ns": 1748397.56557998,
+          "execution_ns": 2401921,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16753863
+        },
+        {
+          "activation_count": 37439,
+          "burst_threshold_ns": null,
+          "execution_ns": 2287845,
+          "logical_job_count": 37439,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 15827928
+        },
+        {
+          "activation_count": 38184,
+          "burst_threshold_ns": null,
+          "execution_ns": 2244906,
+          "logical_job_count": 38184,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 13753508
+        }
+      ],
+      "observed_execution_max_ns": 2401921,
+      "observed_logical_period_min_ns": 13753508,
+      "period_ns": 12470306,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 2401921,
+      "role_observed_logical_period_min_ns": 13703634,
+      "runtime_ns": 2882306,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x6c52a0|librealsense2.so.2.58@0x6c5938",
+      "utilization": 0.23113354235252928
+    },
+    {
+      "deadline_ns": 12470306,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 36104,
+          "burst_threshold_ns": null,
+          "execution_ns": 2114695,
+          "logical_job_count": 36104,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 13703634
+        },
+        {
+          "activation_count": 36280,
+          "burst_threshold_ns": null,
+          "execution_ns": 2265371,
+          "logical_job_count": 36280,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 14852866
+        },
+        {
+          "activation_count": 40663,
+          "burst_threshold_ns": 1288706.8955530578,
+          "execution_ns": 2297091,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 16709948
+        }
+      ],
+      "observed_execution_max_ns": 2297091,
+      "observed_logical_period_min_ns": 13703634,
+      "period_ns": 12470306,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 2401921,
+      "role_observed_logical_period_min_ns": 13703634,
+      "runtime_ns": 2882306,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x71525c|librealsense2.so.2.58@0x7306c8|librealsense2.so.2.58@0x8394c0|librealsense2.so.2.58@0x827450|librealsense2.so.2.58@0x6c52a0|librealsense2.so.2.58@0x6c5938",
+      "utilization": 0.23113354235252928
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 164,
+          "burst_threshold_ns": 13851275.987283373,
+          "execution_ns": 49389,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074183
+        },
+        {
+          "activation_count": 169,
+          "burst_threshold_ns": 15452915.370584024,
+          "execution_ns": 59627,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000054304
+        },
+        {
+          "activation_count": 171,
+          "burst_threshold_ns": 63319136.78881675,
+          "execution_ns": 56814,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072437
+        }
+      ],
+      "observed_execution_max_ns": 59627,
+      "observed_logical_period_min_ns": 5000054304,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 59627,
+      "role_observed_logical_period_min_ns": 5000054304,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x8288b0|librealsense2.so.2.58@0x419f80|librealsense2.so.2.58@0x41f180",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 169,
+          "burst_threshold_ns": 19458174.59963054,
+          "execution_ns": 57519,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000073409
+        },
+        {
+          "activation_count": 173,
+          "burst_threshold_ns": 14187774.98281531,
+          "execution_ns": 54925,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000073500
+        },
+        {
+          "activation_count": 169,
+          "burst_threshold_ns": 17737953.117022213,
+          "execution_ns": 51739,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000079641
+        }
+      ],
+      "observed_execution_max_ns": 57519,
+      "observed_logical_period_min_ns": 5000073409,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 59627,
+      "role_observed_logical_period_min_ns": 5000054304,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x8288b0|librealsense2.so.2.58@0x419f80|librealsense2.so.2.58@0x41f180",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 167,
+          "burst_threshold_ns": 14295379.06617768,
+          "execution_ns": 49242,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000070041
+        },
+        {
+          "activation_count": 170,
+          "burst_threshold_ns": 45935669.666626826,
+          "execution_ns": 51574,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072860
+        },
+        {
+          "activation_count": 165,
+          "burst_threshold_ns": 20509906.15996914,
+          "execution_ns": 52149,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074298
+        }
+      ],
+      "observed_execution_max_ns": 52149,
+      "observed_logical_period_min_ns": 5000070041,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 53885,
+      "role_observed_logical_period_min_ns": 5000045334,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x8288b0|librealsense2.so.2.58@0x45e2d0|librealsense2.so.2.58@0x45625c",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 160,
+          "burst_threshold_ns": 14252946.09813066,
+          "execution_ns": 49539,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000045334
+        },
+        {
+          "activation_count": 160,
+          "burst_threshold_ns": 11944962.845272312,
+          "execution_ns": 53885,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074901
+        },
+        {
+          "activation_count": 174,
+          "burst_threshold_ns": 18313242.99980634,
+          "execution_ns": 48204,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072594
+        }
+      ],
+      "observed_execution_max_ns": 53885,
+      "observed_logical_period_min_ns": 5000045334,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 53885,
+      "role_observed_logical_period_min_ns": 5000045334,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x8288b0|librealsense2.so.2.58@0x45e2d0|librealsense2.so.2.58@0x45625c",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 156,
+          "burst_threshold_ns": 12171572.787908882,
+          "execution_ns": 50797,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000073716
+        },
+        {
+          "activation_count": 173,
+          "burst_threshold_ns": 14233341.246489033,
+          "execution_ns": 52499,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000077955
+        },
+        {
+          "activation_count": 172,
+          "burst_threshold_ns": 11622907.134647166,
+          "execution_ns": 50110,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072924
+        }
+      ],
+      "observed_execution_max_ns": 52499,
+      "observed_logical_period_min_ns": 5000072924,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 64297,
+      "role_observed_logical_period_min_ns": 5000048749,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x838904|librealsense2.so.2.58@0x43ed3c|librealsense2.so.2.58@0x41f0d0",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 160,
+          "burst_threshold_ns": 17745836.57231425,
+          "execution_ns": 54149,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074873
+        },
+        {
+          "activation_count": 171,
+          "burst_threshold_ns": 12619535.177903742,
+          "execution_ns": 64297,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000083771
+        },
+        {
+          "activation_count": 168,
+          "burst_threshold_ns": 13137605.671001509,
+          "execution_ns": 50889,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000048749
+        }
+      ],
+      "observed_execution_max_ns": 64297,
+      "observed_logical_period_min_ns": 5000048749,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 64297,
+      "role_observed_logical_period_min_ns": 5000048749,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x838904|librealsense2.so.2.58@0x43ed3c|librealsense2.so.2.58@0x41f0d0",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 163,
+          "burst_threshold_ns": 13764008.761736859,
+          "execution_ns": 47667,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000077521
+        },
+        {
+          "activation_count": 162,
+          "burst_threshold_ns": 13144680.287596956,
+          "execution_ns": 49609,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000075815
+        },
+        {
+          "activation_count": 169,
+          "burst_threshold_ns": 18171123.29250828,
+          "execution_ns": 53518,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000071501
+        }
+      ],
+      "observed_execution_max_ns": 53518,
+      "observed_logical_period_min_ns": 5000071501,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 53518,
+      "role_observed_logical_period_min_ns": 5000048565,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x838904|librealsense2.so.2.58@0x45f008|librealsense2.so.2.58@0x45612c",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 170,
+          "burst_threshold_ns": 66819857.58057293,
+          "execution_ns": 53333,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000048565
+        },
+        {
+          "activation_count": 170,
+          "burst_threshold_ns": 12758227.634462006,
+          "execution_ns": 53444,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072875
+        },
+        {
+          "activation_count": 162,
+          "burst_threshold_ns": 12337833.883304637,
+          "execution_ns": 51148,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000070455
+        }
+      ],
+      "observed_execution_max_ns": 53444,
+      "observed_logical_period_min_ns": 5000048565,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 53518,
+      "role_observed_logical_period_min_ns": 5000048565,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x3eb664|librealsense2.so.2.58@0x825d20|librealsense2.so.2.58@0x838904|librealsense2.so.2.58@0x45f008|librealsense2.so.2.58@0x45612c",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 161,
+          "burst_threshold_ns": 13326570.92091983,
+          "execution_ns": 51000,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000075820
+        },
+        {
+          "activation_count": 166,
+          "burst_threshold_ns": 12834424.243561843,
+          "execution_ns": 56868,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074237
+        },
+        {
+          "activation_count": 171,
+          "burst_threshold_ns": 11952910.869079882,
+          "execution_ns": 47295,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072732
+        }
+      ],
+      "observed_execution_max_ns": 56868,
+      "observed_logical_period_min_ns": 5000072732,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 61816,
+      "role_observed_logical_period_min_ns": 5000063169,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x6c4874|librealsense2.so.2.58@0x7efae0|realsense_steady_probe|libc.so.6@0x284c4|libc.so.6@0x28598",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 159,
+          "burst_threshold_ns": 55688238.19087136,
+          "execution_ns": 61816,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000072349
+        },
+        {
+          "activation_count": 170,
+          "burst_threshold_ns": 58630128.16563334,
+          "execution_ns": 57203,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000075534
+        },
+        {
+          "activation_count": 175,
+          "burst_threshold_ns": 13713381.921642488,
+          "execution_ns": 54054,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000063169
+        }
+      ],
+      "observed_execution_max_ns": 61816,
+      "observed_logical_period_min_ns": 5000063169,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 61816,
+      "role_observed_logical_period_min_ns": 5000063169,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x6c4874|librealsense2.so.2.58@0x7efae0|realsense_steady_probe|libc.so.6@0x284c4|libc.so.6@0x28598",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 91035477,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 6854,
+          "burst_threshold_ns": 9927867.476037037,
+          "execution_ns": 73056,
+          "logical_job_count": 5961,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 100078347
+        },
+        {
+          "activation_count": 6802,
+          "burst_threshold_ns": 13915209.677397463,
+          "execution_ns": 70905,
+          "logical_job_count": 5958,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 100038986
+        },
+        {
+          "activation_count": 7380,
+          "burst_threshold_ns": 9784766.221934125,
+          "execution_ns": 78389,
+          "logical_job_count": 5968,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 100078764
+        }
+      ],
+      "observed_execution_max_ns": 78389,
+      "observed_logical_period_min_ns": 100038986,
+      "period_ns": 91035477,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 1,
+      "role_observed_execution_max_ns": 78389,
+      "role_observed_logical_period_min_ns": 100038986,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x749164|librealsense2.so.2.58@0x7139c0|librealsense2.so.2.58@0x776270|librealsense2.so.2.58@0x776558|librealsense2.so.2.58@0x770c68",
+      "utilization": 0.0010984728514137406
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 168,
+          "burst_threshold_ns": 19073673.052278105,
+          "execution_ns": 41352,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000068770
+        },
+        {
+          "activation_count": 176,
+          "burst_threshold_ns": 46683480.260862075,
+          "execution_ns": 54367,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074173
+        },
+        {
+          "activation_count": 172,
+          "burst_threshold_ns": 32523607.741596874,
+          "execution_ns": 64981,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000071190
+        }
+      ],
+      "observed_execution_max_ns": 64981,
+      "observed_logical_period_min_ns": 5000068770,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 64981,
+      "role_observed_logical_period_min_ns": 5000051268,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x793408|librealsense2.so.2.58@0x43dae8|librealsense2.so.2.58@0x42490c|librealsense2.so.2.58@0x426d48|librealsense2.so.2.58@0x427e88",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 4194304000,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 168,
+          "burst_threshold_ns": 12594092.937481524,
+          "execution_ns": 51147,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000051268
+        },
+        {
+          "activation_count": 172,
+          "burst_threshold_ns": 69611940.9986735,
+          "execution_ns": 56556,
+          "logical_job_count": 120,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000074632
+        },
+        {
+          "activation_count": 183,
+          "burst_threshold_ns": 58815785.993158676,
+          "execution_ns": 40666,
+          "logical_job_count": 119,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 5000073464
+        }
+      ],
+      "observed_execution_max_ns": 56556,
+      "observed_logical_period_min_ns": 5000051268,
+      "period_ns": 4194304000,
+      "period_was_clamped_to_kernel_maximum": true,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 64981,
+      "role_observed_logical_period_min_ns": 5000051268,
+      "runtime_ns": 100000,
+      "runtime_was_clamped_to_kernel_minimum": true,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x793408|librealsense2.so.2.58@0x43dae8|librealsense2.so.2.58@0x42490c|librealsense2.so.2.58@0x426d48|librealsense2.so.2.58@0x427e88",
+      "utilization": 2.384185791015625e-05
+    },
+    {
+      "deadline_ns": 910646585,
+      "instance": 1,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 2089,
+          "burst_threshold_ns": 60221567.5573466,
+          "execution_ns": 265279,
+          "logical_job_count": 599,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1001251866
+        },
+        {
+          "activation_count": 2097,
+          "burst_threshold_ns": 69231020.98771451,
+          "execution_ns": 275303,
+          "logical_job_count": 599,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1001221024
+        },
+        {
+          "activation_count": 2119,
+          "burst_threshold_ns": 63789138.84358402,
+          "execution_ns": 278275,
+          "logical_job_count": 599,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1000954150
+        }
+      ],
+      "observed_execution_max_ns": 278275,
+      "observed_logical_period_min_ns": 1000954150,
+      "period_ns": 910646585,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 278275,
+      "role_observed_logical_period_min_ns": 1000710534,
+      "runtime_ns": 608753,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x79a660|librealsense2.so.2.58@0x79a81c|librealsense2.so.2.58@0x427adc|librealsense2.so.2.58@0x47b8dc|librealsense2.so.2.58@0x4673e4",
+      "utilization": 0.000668484360483048
+    },
+    {
+      "deadline_ns": 910646585,
+      "instance": 2,
+      "name": "realsense_stead",
+      "observations": [
+        {
+          "activation_count": 2109,
+          "burst_threshold_ns": 55847410.23589015,
+          "execution_ns": 259597,
+          "logical_job_count": 598,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1001248058
+        },
+        {
+          "activation_count": 2086,
+          "burst_threshold_ns": 63840312.70791966,
+          "execution_ns": 275956,
+          "logical_job_count": 598,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1001214290
+        },
+        {
+          "activation_count": 2110,
+          "burst_threshold_ns": 64052284.95479449,
+          "execution_ns": 270814,
+          "logical_job_count": 598,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "realsense_stead",
+          "period_ns": 1000710534
+        }
+      ],
+      "observed_execution_max_ns": 275956,
+      "observed_logical_period_min_ns": 1000710534,
+      "period_ns": 910646585,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 278275,
+      "role_observed_logical_period_min_ns": 1000710534,
+      "runtime_ns": 608753,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x79a660|librealsense2.so.2.58@0x79a81c|librealsense2.so.2.58@0x427adc|librealsense2.so.2.58@0x47b8dc|librealsense2.so.2.58@0x4673e4",
+      "utilization": 0.000668484360483048
+    },
+    {
+      "deadline_ns": 12243126,
+      "instance": 1,
+      "name": "rs-wait-0",
+      "observations": [
+        {
+          "activation_count": 35716,
+          "burst_threshold_ns": null,
+          "execution_ns": 111724,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-0",
+          "period_ns": 13622400
+        },
+        {
+          "activation_count": 35717,
+          "burst_threshold_ns": null,
+          "execution_ns": 140328,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-0",
+          "period_ns": 13462962
+        },
+        {
+          "activation_count": 35716,
+          "burst_threshold_ns": null,
+          "execution_ns": 101724,
+          "logical_job_count": 35716,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-0",
+          "period_ns": 13806290
+        }
+      ],
+      "observed_execution_max_ns": 140328,
+      "observed_logical_period_min_ns": 13462962,
+      "period_ns": 12243126,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 140328,
+      "role_observed_logical_period_min_ns": 13453985,
+      "runtime_ns": 168394,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|realsense_steady_probe|libc.so.6@0x284c4|libc.so.6@0x28598|realsense_steady_probe",
+      "utilization": 0.013754167032177893
+    },
+    {
+      "deadline_ns": 12243126,
+      "instance": 2,
+      "name": "rs-wait-1",
+      "observations": [
+        {
+          "activation_count": 35715,
+          "burst_threshold_ns": null,
+          "execution_ns": 102686,
+          "logical_job_count": 35715,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-1",
+          "period_ns": 13688576
+        },
+        {
+          "activation_count": 35717,
+          "burst_threshold_ns": null,
+          "execution_ns": 100961,
+          "logical_job_count": 35717,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-1",
+          "period_ns": 13453985
+        },
+        {
+          "activation_count": 35715,
+          "burst_threshold_ns": null,
+          "execution_ns": 123277,
+          "logical_job_count": 35715,
+          "model_kind": "periodic_or_sporadic_worker",
+          "name": "rs-wait-1",
+          "period_ns": 13800336
+        }
+      ],
+      "observed_execution_max_ns": 123277,
+      "observed_logical_period_min_ns": 13453985,
+      "period_ns": 12243126,
+      "period_was_clamped_to_kernel_maximum": false,
+      "role_instance_count": 2,
+      "role_observed_execution_max_ns": 140328,
+      "role_observed_logical_period_min_ns": 13453985,
+      "runtime_ns": 168394,
+      "runtime_was_clamped_to_kernel_minimum": false,
+      "signature": "entry=libstdc++.so.6@0xe1ac0|realsense_steady_probe|libc.so.6@0x284c4|libc.so.6@0x28598|realsense_steady_probe",
+      "utilization": 0.013754167032177893
+    }
+  ],
+  "post_calibration_adjustments": [
+    {
+      "reason": "A 600-second gated SCHED_DEADLINE validation observed five steady-state runtime exhaustions in the low-frequency time-difference-keeper role.",
+      "role_signature": "entry=libstdc++.so.6@0xe1ac0|librealsense2.so.2.58@0x8a4b14|librealsense2.so.2.58@0x79a660|librealsense2.so.2.58@0x79a81c|librealsense2.so.2.58@0x427adc|librealsense2.so.2.58@0x47b8dc|librealsense2.so.2.58@0x4673e4",
+      "instances": 2,
+      "previous_runtime_ns": 333930,
+      "maximum_untraced_validation_activation_execution_ns": 507294,
+      "runtime_margin": 1.2,
+      "updated_runtime_ns": 608753,
+      "deadline_ns": 910646585,
+      "period_ns": 910646585,
+      "steady_runtime_exhaustions_before_adjustment": 5,
+      "validation_after_adjustment": {
+        "measurement_duration_ms": 600000.121029,
+        "observed_frames": 285732,
+        "unique_frames": 285732,
+        "duplicate_frames": 0,
+        "sequence_gaps": 0,
+        "measurement_timeouts": 0,
+        "uvc_resubmit_errors": 0,
+        "steady_runtime_exhaustions": 0,
+        "steady_sigxcpu_events": 0,
+        "post_steady_runtime_exhaustions": 9,
+        "steady_gate_passed": true,
+        "thread_lifecycle_sha256": "9430093450a1b4e6ec77bcc8bb96cfb9d970dd095157162051390a480fee58ea",
+        "overrun_kernel_trace_sha256": "f6fcad2ea1520e7da26238275e9f07188497761a3dcbd3a87230e56b4fd1b8ba",
+        "steady_summary_sha256": "93a78dd28c79fffb30ec27ad5f0dea98f79eabfba53bab7afca900715d75c658"
+      }
+    }
+  ],
+  "total_reserved_cpu_utilization": 1.075842316486373,
+  "formal_validation_after_adjustment": {
+    "kernel_release": "6.12.96-rpi5-rt-btf-uvc16+",
+    "camera_count": 2,
+    "workload": "stress_all_streams_60fps",
+    "repetitions": 3,
+    "requested_duration_ms_per_repetition": 600000,
+    "all_repetitions_successful_on_first_attempt": true,
+    "all_profile_entries_assigned": true,
+    "aggregate_duplicate_frames": 0,
+    "aggregate_sequence_gaps": 0,
+    "aggregate_stale_framesets": 0,
+    "aggregate_timeouts": 0,
+    "aggregate_drops": 0,
+    "uvc_resubmit_errors_across_repetitions": 1,
+    "note": "The single UVC resubmit warning was captured near the end of the second repetition and caused no observable freshness or sequence failure. Its -EPERM return means that the USB core had marked the URB rejected, which normally occurs while uvcvideo poisons URBs during stream stop. Kernel printk timestamps and the probe's CLOCK_BOOTTIME markers were not clock-correlated in this run, so the warning is not assigned to the steady phase.",
+    "repetition_results": [
+      {
+        "repetition": 1,
+        "duration_ms": 600000.076471,
+        "observed_frames": 285732,
+        "unique_frames": 285732,
+        "process_wide_overrun_signals": 2,
+        "uvc_resubmit_errors": 0,
+        "delivery_interarrival_max_ms": 17.300949,
+        "delivery_interarrival_p99_ms": 16.962769,
+        "steady_summary_sha256": "d72cf9e90ed41945ddacfd8ec8b22c370445f13264b724e6f0c430b6b268bea0",
+        "thread_lifecycle_sha256": "4e4ebd5c0b6c7bf089a103ccefc74e487b7c3b83088c89c84bf51c6819343dab"
+      },
+      {
+        "repetition": 2,
+        "duration_ms": 600000.126099,
+        "observed_frames": 285736,
+        "unique_frames": 285736,
+        "process_wide_overrun_signals": 0,
+        "uvc_resubmit_errors": 1,
+        "delivery_interarrival_max_ms": 17.367040,
+        "delivery_interarrival_p99_ms": 17.038186,
+        "steady_summary_sha256": "32d26d5d749a00e085ba191b1accb94785c80dd08ba70153656b94797638b006",
+        "thread_lifecycle_sha256": "62fcb9b78ce9dc532773bb09f7942301ad6916a619c871d2eb2602e8825934e2",
+        "kernel_log_sha256": "9f31b353e6edb28bd3d50e6e7ed42dd8d69ee1f0914531839f4f75dfbc66d477"
+      },
+      {
+        "repetition": 3,
+        "duration_ms": 600000.121784,
+        "observed_frames": 285732,
+        "unique_frames": 285732,
+        "process_wide_overrun_signals": 0,
+        "uvc_resubmit_errors": 0,
+        "delivery_interarrival_max_ms": 17.374911,
+        "delivery_interarrival_p99_ms": 16.926594,
+        "steady_summary_sha256": "921bc2c7744e42cac7feeef13d2973009784abcaa8bc54f0889145c49d0434bc",
+        "thread_lifecycle_sha256": "7769a9a4f17a4e996c1bae2ea6b1847f6d59d4a5838e716567b230a8b09abecd"
+      }
+    ],
+    "steady_phase_budget_evidence": {
+      "duration_ms": 600000.121029,
+      "steady_runtime_exhaustions": 0,
+      "steady_sigxcpu_events": 0,
+      "post_steady_runtime_exhaustions": 9,
+      "steady_gate_passed": true,
+      "overrun_kernel_trace_sha256": "f6fcad2ea1520e7da26238275e9f07188497761a3dcbd3a87230e56b4fd1b8ba"
+    }
+  }
+}

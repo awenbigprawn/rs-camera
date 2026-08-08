@@ -150,6 +150,36 @@ def main() -> None:
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--lime", type=Path, default=DEFAULT_LIME)
     parser.add_argument("--no-lime", action="store_true")
+    parser.add_argument(
+        "--v4l2-diagnostics",
+        action="store_true",
+        help="record low-overhead V4L2 select/metadata/DQBUF/callback/requeue stages",
+    )
+    parser.add_argument(
+        "--v4l2-diagnostics-build-only",
+        action="store_true",
+        help=(
+            "compile the V4L2 diagnostic markers to preserve a calibrated "
+            "binary layout, but do not record or parse their event stream"
+        ),
+    )
+    parser.add_argument(
+        "--overrun-kernel-trace",
+        action="store_true",
+        help=(
+            "record all-CPU IRQ/softirq, V4L2, SIGXCPU, and the exact "
+            "6.12.96 Deadline-throttle kprobe"
+        ),
+    )
+    parser.add_argument(
+        "--freshness-kernel-trace",
+        action="store_true",
+        help=(
+            "record low-volume UVC/VB2/V4L2 and exceptional xHCI events, "
+            "then correlate them with raw librealsense sequence gaps; "
+            "implies --v4l2-diagnostics"
+        ),
+    )
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
         "--cpu-isolation",
@@ -506,6 +536,11 @@ def main() -> None:
         build_dir=args.build_dir,
         lime=args.lime,
         use_lime=not args.no_lime,
+        v4l2_diagnostics=(
+            args.v4l2_diagnostics or args.freshness_kernel_trace
+        ),
+        overrun_kernel_trace=args.overrun_kernel_trace,
+        freshness_kernel_trace=args.freshness_kernel_trace,
         use_sudo=not args.no_sudo,
         cpu_isolation_enabled=args.cpu_isolation,
         housekeeping_cpus=args.housekeeping_cpus,
@@ -542,6 +577,7 @@ def main() -> None:
         recovery_settle_seconds=args.recovery_settle_seconds,
         max_attempts_per_run=args.max_attempts_per_run,
         build_jobs=args.build_jobs,
+        v4l2_diagnostics_build_only=args.v4l2_diagnostics_build_only,
     )
     campaign_constants = {
         **FIXED_CAMPAIGN_CONSTANTS,

@@ -273,28 +273,44 @@ def generate_profile(
         if maximum_modeled_period_us is not None
         else None
     )
+    instances_by_signature: Dict[str, List[int]] = defaultdict(list)
+    for signature, instance in sorted(expected):
+        instances_by_signature[signature].append(instance)
+
     rows = []
     detail = []
     excluded = []
-    for signature, instance in sorted(expected):
-        observations = [threads[(signature, instance)] for threads in per_run]
-        observed_execution_ns = max(item["execution_ns"] for item in observations)
-        observed_period_ns = min(item["period_ns"] for item in observations)
+    for signature in sorted(instances_by_signature):
+        instances = sorted(instances_by_signature[signature])
+        observations_by_instance = {
+            instance: [threads[(signature, instance)] for threads in per_run]
+            for instance in instances
+        }
+        role_observations = [
+            observation
+            for instance in instances
+            for observation in observations_by_instance[instance]
+        ]
+        observed_execution_ns = max(
+            item["execution_ns"] for item in role_observations
+        )
+        observed_period_ns = min(item["period_ns"] for item in role_observations)
         if (
             maximum_modeled_period_ns is not None
             and observed_period_ns > maximum_modeled_period_ns
         ):
-            excluded.append(
-                {
-                    "signature": signature,
-                    "instance": instance,
-                    "name": str(observations[0]["name"]),
-                    "observed_execution_max_ns": observed_execution_ns,
-                    "observed_logical_period_min_ns": observed_period_ns,
-                    "reason": "observed period exceeds maximum modeled period",
-                    "observations": observations,
-                }
-            )
+            for instance in instances:
+                excluded.append(
+                    {
+                        "signature": signature,
+                        "instance": instance,
+                        "name": str(observations_by_instance[instance][0]["name"]),
+                        "role_observed_execution_max_ns": observed_execution_ns,
+                        "role_observed_logical_period_min_ns": observed_period_ns,
+                        "reason": "observed role period exceeds maximum modeled period",
+                        "observations": observations_by_instance[instance],
+                    }
+                )
             continue
         runtime_ns = max(
             minimum_runtime_ns,
@@ -306,37 +322,44 @@ def generate_profile(
         )
         if runtime_ns > period_ns:
             raise ValueError(
-                f"runtime exceeds deadline for {signature} instance {instance}: "
+                f"runtime exceeds deadline for thread role {signature}: "
                 f"runtime={runtime_ns}, period={period_ns}"
             )
-        name = str(observations[0]["name"])
-        rows.append(
-            {
+        for instance in instances:
+            instance_observations = observations_by_instance[instance]
+            row = {
                 "signature": signature,
                 "instance": instance,
-                "name": name,
+                "name": str(instance_observations[0]["name"]),
                 "runtime_ns": runtime_ns,
                 "deadline_ns": period_ns,
                 "period_ns": period_ns,
             }
-        )
-        detail.append(
-            {
-                **rows[-1],
-                "observed_execution_max_ns": observed_execution_ns,
-                "observed_logical_period_min_ns": observed_period_ns,
-                "runtime_was_clamped_to_kernel_minimum": (
-                    runtime_ns == minimum_runtime_ns
-                    and observed_execution_ns * runtime_margin < minimum_runtime_ns
-                ),
-                "period_was_clamped_to_kernel_maximum": (
-                    period_ns == maximum_period_ns
-                    and observed_period_ns * period_scale > maximum_period_ns
-                ),
-                "utilization": runtime_ns / period_ns,
-                "observations": observations,
-            }
-        )
+            rows.append(row)
+            detail.append(
+                {
+                    **row,
+                    "observed_execution_max_ns": max(
+                        item["execution_ns"] for item in instance_observations
+                    ),
+                    "observed_logical_period_min_ns": min(
+                        item["period_ns"] for item in instance_observations
+                    ),
+                    "role_instance_count": len(instances),
+                    "role_observed_execution_max_ns": observed_execution_ns,
+                    "role_observed_logical_period_min_ns": observed_period_ns,
+                    "runtime_was_clamped_to_kernel_minimum": (
+                        runtime_ns == minimum_runtime_ns
+                        and observed_execution_ns * runtime_margin < minimum_runtime_ns
+                    ),
+                    "period_was_clamped_to_kernel_maximum": (
+                        period_ns == maximum_period_ns
+                        and observed_period_ns * period_scale > maximum_period_ns
+                    ),
+                    "utilization": runtime_ns / period_ns,
+                    "observations": instance_observations,
+                }
+            )
 
     if not rows:
         raise ValueError("modeled-period filter excluded every live worker")
@@ -352,10 +375,11 @@ def generate_profile(
         "schema_version": 1,
         "profile": str(output),
         "formula": {
-            "runtime": "max(kernel_minimum, ceil(runtime_margin * observed_max_logical_job_execution))",
-            "deadline": "min(kernel_maximum, floor(period_scale * observed_min_stable_logical_period))",
+            "runtime": "max(kernel_minimum, ceil(runtime_margin * role_max_logical_job_execution_across_runs_and_instances))",
+            "deadline": "min(kernel_maximum, floor(period_scale * role_min_stable_logical_period_across_runs_and_instances))",
             "period": "deadline",
         },
+        "shared_parameters_per_thread_signature": True,
         "runtime_margin": runtime_margin,
         "period_scale": period_scale,
         "minimum_runtime_us": minimum_runtime_us,

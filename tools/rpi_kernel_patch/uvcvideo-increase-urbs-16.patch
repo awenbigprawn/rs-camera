@@ -1,0 +1,9 @@
+diff --git a/drivers/media/usb/uvc/uvcvideo.h b/drivers/media/usb/uvc/uvcvideo.h
+index f0d6e8ad88d8..20f97c233e94 100644
+--- a/drivers/media/usb/uvc/uvcvideo.h
++++ b/drivers/media/usb/uvc/uvcvideo.h
+@@ -53,3 +53,3 @@
+ /* Number of isochronous URBs. */
+-#define UVC_URBS		5
++#define UVC_URBS		16
+ /* Maximum number of packets per URB. */

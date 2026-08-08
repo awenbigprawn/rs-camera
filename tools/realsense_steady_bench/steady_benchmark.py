@@ -24,6 +24,11 @@ from noise_workloads import (
 )
 from noise_transition import NoiseTransition
 from parse_steady_trace import parse_steady_trace
+from parse_v4l2_diagnostic_trace import parse_trace as parse_v4l2_diagnostic_trace
+from parse_overrun_kernel_trace import parse_trace as parse_overrun_kernel_trace
+from parse_freshness_kernel_trace import (
+    parse_trace as parse_freshness_kernel_trace,
+)
 from realsense_bench_common.commands import (
     build_pthread_tracer,
     scheduler_prefix,
@@ -60,6 +65,11 @@ from steady_settings import (
 )
 
 
+OVERRUN_KERNEL_TRACE = TOOL_DIR / "record_overrun_kernel_trace.sh"
+FRESHNESS_KERNEL_TRACE = TOOL_DIR / "record_freshness_kernel_trace.sh"
+V4L2_DIAGNOSTIC_TRACE_CAPACITY = 12_000_000
+
+
 class RealSenseSteadyBench(Benchmark):
     def __init__(
         self,
@@ -67,6 +77,9 @@ class RealSenseSteadyBench(Benchmark):
         build_dir: Path,
         lime: Path,
         use_lime: bool,
+        v4l2_diagnostics: bool,
+        overrun_kernel_trace: bool,
+        freshness_kernel_trace: bool,
         use_sudo: bool,
         cpu_isolation_enabled: bool,
         housekeeping_cpus: str,
@@ -101,6 +114,7 @@ class RealSenseSteadyBench(Benchmark):
         recovery_settle_seconds: float,
         max_attempts_per_run: int,
         build_jobs: int,
+        v4l2_diagnostics_build_only: bool = False,
     ) -> None:
         memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
         super().__init__(
@@ -115,6 +129,12 @@ class RealSenseSteadyBench(Benchmark):
         self._lime = lime.resolve()
         self._priority = CAMPAIGN_RT_PRIORITY
         self._use_lime = use_lime
+        self._v4l2_diagnostics = v4l2_diagnostics
+        self._v4l2_diagnostics_build = (
+            v4l2_diagnostics or v4l2_diagnostics_build_only
+        )
+        self._overrun_kernel_trace = overrun_kernel_trace
+        self._freshness_kernel_trace = freshness_kernel_trace
         self._use_sudo = use_sudo
         self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
@@ -235,6 +255,21 @@ class RealSenseSteadyBench(Benchmark):
         if self._recover_on_failure == "full-reset":
             self._recovery.validate_environment()
         self._system_controls.validate_environment()
+        if self._overrun_kernel_trace:
+            if not self._use_sudo:
+                raise RuntimeError("--overrun-kernel-trace requires sudo")
+            if shutil.which("trace-cmd") is None:
+                raise RuntimeError("--overrun-kernel-trace requires trace-cmd")
+        if self._freshness_kernel_trace:
+            if not self._use_sudo:
+                raise RuntimeError("--freshness-kernel-trace requires sudo")
+            if shutil.which("trace-cmd") is None:
+                raise RuntimeError("--freshness-kernel-trace requires trace-cmd")
+        if self._overrun_kernel_trace and self._freshness_kernel_trace:
+            raise RuntimeError(
+                "--overrun-kernel-trace and --freshness-kernel-trace "
+                "cannot wrap the same process simultaneously"
+            )
 
         subprocess.check_call(
             [
@@ -246,6 +281,7 @@ class RealSenseSteadyBench(Benchmark):
                 "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                 f"-DFORCE_RSUSB_BACKEND={'ON' if self._system_controls.config.rsusb_backend else 'OFF'}",
                 f"-DRS_CAMERA_BUILD_GPU_NOISE={'ON' if self._noise_suite.gpu_enabled else 'OFF'}",
+                f"-DRS_CAMERA_V4L2_DIAGNOSTICS={'ON' if self._v4l2_diagnostics_build else 'OFF'}",
             ]
         )
         build_targets = [
@@ -375,6 +411,11 @@ class RealSenseSteadyBench(Benchmark):
         summary_path = attempt_dir / "steady_summary.json"
         events_path = attempt_dir / "frame_events.csv"
         lifecycle_path = attempt_dir / "thread_lifecycle.jsonl"
+        v4l2_diagnostic_path = attempt_dir / "v4l2_diagnostic_trace.bin"
+        kernel_trace_path = attempt_dir / "overrun_kernel_trace.dat"
+        freshness_kernel_trace_path = (
+            attempt_dir / "freshness_kernel_trace.dat"
+        )
         lime_dir = attempt_dir / "lime_trace"
         stdout_path = attempt_dir / "probe_stdout.txt"
         before = attempt_dir / "topology_before.json"
@@ -426,7 +467,31 @@ class RealSenseSteadyBench(Benchmark):
             lime_dir=lime_dir,
             use_lime=self._use_lime,
             use_sudo=self._use_sudo,
+            target_environment=(
+                {
+                    "RS_V4L2_DIAGNOSTIC_TRACE_FILE": str(v4l2_diagnostic_path),
+                    "RS_V4L2_DIAGNOSTIC_TRACE_CAPACITY": str(
+                        V4L2_DIAGNOSTIC_TRACE_CAPACITY
+                    ),
+                }
+                if self._v4l2_diagnostics
+                else None
+            ),
         )
+        if self._overrun_kernel_trace:
+            command = [
+                "sudo",
+                str(OVERRUN_KERNEL_TRACE),
+                str(kernel_trace_path),
+                *command,
+            ]
+        elif self._freshness_kernel_trace:
+            command = [
+                "sudo",
+                str(FRESHNESS_KERNEL_TRACE),
+                str(freshness_kernel_trace_path),
+                *command,
+            ]
 
         attempt_manifest = {
             **base_manifest,
@@ -524,6 +589,57 @@ class RealSenseSteadyBench(Benchmark):
                 (attempt_dir / "trace_parse_error.txt").write_text(
                     f"{type(error).__name__}: {error}\n",
                     encoding="utf-8",
+                )
+                if summary.get("success"):
+                    raise
+        if self._v4l2_diagnostics and v4l2_diagnostic_path.is_file():
+            try:
+                parse_v4l2_diagnostic_trace(
+                    v4l2_diagnostic_path,
+                    lifecycle_path,
+                    attempt_dir,
+                    compact_output=self._freshness_kernel_trace,
+                )
+            except Exception as error:
+                (attempt_dir / "v4l2_diagnostic_parse_error.txt").write_text(
+                    f"{type(error).__name__}: {error}\n", encoding="utf-8"
+                )
+                if summary.get("success"):
+                    raise
+        activation_path = attempt_dir / "thread_steady_activations.csv"
+        if (
+            self._overrun_kernel_trace
+            and kernel_trace_path.is_file()
+            and activation_path.is_file()
+        ):
+            try:
+                parse_overrun_kernel_trace(
+                    kernel_trace_path,
+                    lifecycle_path,
+                    activation_path,
+                    attempt_dir,
+                )
+            except Exception as error:
+                (attempt_dir / "overrun_kernel_trace_parse_error.txt").write_text(
+                    f"{type(error).__name__}: {error}\n", encoding="utf-8"
+                )
+                if summary.get("success"):
+                    raise
+        if (
+            self._freshness_kernel_trace
+            and freshness_kernel_trace_path.is_file()
+        ):
+            try:
+                parse_freshness_kernel_trace(
+                    freshness_kernel_trace_path,
+                    lifecycle_path,
+                    attempt_dir,
+                )
+            except Exception as error:
+                (
+                    attempt_dir / "freshness_kernel_trace_parse_error.txt"
+                ).write_text(
+                    f"{type(error).__name__}: {error}\n", encoding="utf-8"
                 )
                 if summary.get("success"):
                     raise

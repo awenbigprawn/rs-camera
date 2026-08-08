@@ -97,6 +97,59 @@ make that teardown work identifiable. The temporary analysis storage is one
 64-bit frame-number vector per stream and is released when the summary has
 been written.
 
+### Freshness path diagnostics
+
+Use `--freshness-kernel-trace` to localize duplicate frames and sequence gaps
+without recording every USB transfer. The option implies `--v4l2-diagnostics`
+and combines four clock-aligned layers:
+
+- exceptional xHCI isochronous-IN URB givebacks;
+- UVC frame completion, frame-length validation, corrupted-buffer, and
+  empty-video-queue probes;
+- native VB2 and V4L2 queue/dequeue tracepoints; and
+- librealsense DQBUF, callback, sensor-dispatch, syncer, and application frame
+  events.
+
+The wrapper supports the archived Raspberry Pi 5 6.12.96 standard-BTF and
+PREEMPT_RT-BTF kernels. It uses their BTF-verified UVC structure layout for the
+fixed-offset dynamic probes. Every attempt produces
+`freshness_kernel_trace.dat`, decoded kernel UVC/V4L2 CSV files,
+`freshness_path_correlations.csv`, and
+`freshness_kernel_trace_summary.json`. Each raw librealsense DQBUF gap is
+classified as a device-set UVC payload error, host-reported isochronous packet
+error, invalid payload header, short/overflowed UVC frame, UVC buffer
+starvation, xHCI error, loss before UVC frame completion, loss between UVC and
+V4L2 dequeue, or loss between the kernel dequeue and librealsense. The compact
+validation event is recorded once per completed frame, but only exceptional
+rows are retained in `kernel_freshness_exception_events.csv`.
+Freshness mode also uses compact V4L2 post-processing: it keeps the raw binary
+trace, summary, and sequence-gap CSV but omits the much larger full event and
+duration CSV files. Other V4L2 timing and deadline-overrun runs retain those
+detailed CSV outputs.
+
+Example two-camera diagnosis:
+
+```sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config tools/realsense_steady_bench/configs/timing_trace_60s.json \
+  --case representative_depth_color_30fps_60s_trace \
+  --policies other \
+  --freshness-kernel-trace \
+  --measurement-duration-seconds 600 \
+  --nb-runs 1 \
+  --serial SERIAL_1 \
+  --serial SERIAL_2 \
+  --recover-on-failure full-reset \
+  --max-attempts-per-run 3 \
+  --results-dir tools/realsense_steady_bench/results/freshness_path
+```
+
+Do not enable `--overrun-kernel-trace` in the same run: both options own one
+`trace-cmd` session. If the low-volume trace identifies unexplained loss before
+UVC frame completion, use a separate short xHCI flight-recorder run. Recording
+every successful isochronous URB for ten minutes is intentionally avoided
+because its volume and overhead can perturb the camera workload.
+
 ## Probe Modes
 
 `--delivery wait` gives every camera an explicitly named `rs-wait-N` acquisition
@@ -274,23 +327,38 @@ delivery mode, and stream workload:
   --output tools/realsense_steady_bench/profiles/WORKLOAD.csv
 ~~~
 
-The generator first merges burst activations into logical jobs. For thread
-\(i\), its default parameters are:
+The generator first merges burst activations into logical jobs. Workers with
+the same ASLR-independent creation-stack signature are treated as instances of
+one thread role, including corresponding workers belonging to different
+cameras. It pools every calibration run and every live instance of that role.
+For role \(r\), every instance receives the same conservative parameters:
 
 ~~~text
-runtime_i  = max(kernel minimum, 1.20 * maximum observed logical-job execution)
-deadline_i = period_i
-period_i   = min(kernel maximum, 0.91 * minimum stable logical-job period)
+runtime_r  = max(kernel minimum, 1.20 * role-wide maximum logical-job execution)
+deadline_r = period_r
+period_r   = min(kernel maximum, 0.91 * role-wide minimum stable logical-job period)
 ~~~
 
-Execution fragments separated only by preemption remain in the same activation,
-and sleep-separated burst activations belonging to one model period are summed.
+Thus, a slower camera instance raises the reservation of every corresponding
+camera worker rather than creating camera-specific reservations. Execution
+fragments separated only by preemption remain in the same activation, and
+sleep-separated burst activations belonging to one model period are summed.
 The minimum period is taken only from the stable logical-period mode, not from a
 raw micro-gap inside a burst. The accompanying WORKLOAD.csv.json records all
 observations, clamping, formula constants, sources, and total reserved
 utilization. These are empirical reservation candidates, not WCET guarantees.
 
-### Stored validated profile
+### Stored validated profiles
+
+`profiles/rpi5-6.12.96-standard-btf-two-d435-representative-30fps.csv` is the
+validated profile for two D435 cameras running the 30 FPS representative
+Depth+Color workload. Same-role workers use shared parameters across cameras.
+After an initial 600-second validation exposed four budget exhaustions in one
+`time_diff_keeper`, both instances of that role were raised to 372755 ns. A
+second 600-second validation assigned all 21 workers and observed no runtime
+exhaustion or SIGXCPU event inside the steady-state gate. The profile reserves
+0.18787 CPU equivalents in total. Its build signatures require
+`--v4l2-diagnostics-build-only` (or full `--v4l2-diagnostics`).
 
 `profiles/rpi5-6.12.96-standard-btf-two-d435-stress-60fps.csv` is the stored
 steady-state profile for the Raspberry Pi 5 standard BTF kernel, two D435
@@ -340,6 +408,13 @@ Do not reuse a profile after rebuilding librealsense or changing the kernel,
 stream configuration, number of cameras, or delivery mode. First collect new
 SCHED_OTHER traces. For paper results, pool the planned independent calibration
 traces rather than deriving a profile from a single trace.
+
+When a profile was calibrated with `--v4l2-diagnostics`, validation normally
+uses the same option so creation-stack signatures refer to the identical binary
+layout. For a reservation-only validation where the large per-event V4L2 trace
+is unnecessary, use `--v4l2-diagnostics-build-only`. This compiles the same
+markers but leaves their trace sink disabled, preserving profile identity while
+avoiding the diagnostic storage and recording overhead.
 
 ## Per-thread rate-monotonic RR and FIFO modes
 

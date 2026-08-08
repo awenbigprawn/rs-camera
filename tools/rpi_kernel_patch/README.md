@@ -1,12 +1,14 @@
 # Raspberry Pi RealSense UVC format patch
 
-This directory contains an optional Linux kernel patch for Intel RealSense
-cameras:
+This directory contains optional Linux kernel patches used in Intel RealSense
+experiments:
 
 - `realsense-d16-rw16-uvc.patch`
+- `uvcvideo-increase-urbs-16.patch`
 
-This kernel patch is NOT used in the paper, the benchmark can run without
-this kernel patch.
+The D16/RW16 format patch is not used in the paper. The URB-count patch is an
+experimental mitigation and must be treated as an independent experimental
+factor rather than part of the baseline kernel.
 
 ## Purpose
 
@@ -82,6 +84,33 @@ git apply --reverse "$PATCH_FILE"
 ```
 
 Rebuild and reinstall the kernel and modules after reverting.
+
+## UVC isochronous URB depth experiment
+
+`uvcvideo-increase-urbs-16.patch` changes the Linux UVC driver's fixed
+isochronous request pool from 5 URBs to 16 URBs. It does not change USB packet
+contents, RealSense formats, or librealsense. A larger in-flight pool gives
+the host controller and UVC driver more buffering against delayed URB
+resubmission, at the cost of additional kernel memory and potentially more
+queued data.
+
+Apply it independently to a clean source tree:
+
+```sh
+PATCH_FILE=/home/safebot/program/rs-camera/tools/rpi_kernel_patch/uvcvideo-increase-urbs-16.patch
+
+git apply --check "$PATCH_FILE"
+git apply "$PATCH_FILE"
+```
+
+This patch was adapted for the Raspberry Pi Linux 6.12.96 source revision
+listed above. Build it with a distinct kernel local version so that the
+unmodified baseline remains available for rollback and controlled A/B tests.
+Verify the effective source value before building:
+
+```sh
+grep '^#define UVC_URBS' drivers/media/usb/uvc/uvcvideo.h
+```
 
 ## Verify the installed kernel
 

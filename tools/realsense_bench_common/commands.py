@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Iterable, List
+from typing import Dict, Iterable, List
 
 
 def scheduler_prefix(policy: str, priority: int) -> List[str]:
@@ -32,11 +32,16 @@ def traced_command(
     lime_dir: Path,
     use_lime: bool,
     use_sudo: bool,
+    target_environment: Dict[str, str] | None = None,
 ) -> List[str]:
     target = [
         "env",
         f"LD_PRELOAD={tracer}",
         f"RS_THREAD_TRACE_FILE={lifecycle_path}",
+        *(
+            f"{name}={value}"
+            for name, value in (target_environment or {}).items()
+        ),
         *scheduled_command,
     ]
     command = target
