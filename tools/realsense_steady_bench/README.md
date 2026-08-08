@@ -161,7 +161,8 @@ Stream modes are:
 
 - `depth`: depth only;
 - `depth_color`: depth and RGB;
-- `d435_all`: depth, RGB, infrared 1, and infrared 2.
+- `stereo_all`: depth, RGB, infrared 1, and infrared 2 (`d435_all` is retained
+  as a compatibility alias).
 
 The default D435 all-stream profile is depth/IR at 848x480 and RGB at 640x480,
 all at 30 frames/s.
@@ -273,8 +274,14 @@ continues until the wall-clock deadline. It therefore remains visible as a
 performance failure without changing the duration or replacing the measured
 run with a later retry.
 
-Full-reset recovery is enabled by default. If an attempt fails before
-`steady_state_begin`, the runner:
+Before attempt 1 of every logical run, the runner firmware-resets and
+composite-USB-resets every selected camera. This mandatory-by-default baseline
+reset occurs before pipeline startup and prevents previous runs from leaving
+device or UVC state behind. `--no-reset-before-run` is available only for
+diagnosis and should not be used for formal data.
+
+Full-reset failure recovery is also enabled by default. If an attempt fails
+before `steady_state_begin`, the runner:
 
 1. preserves that failed attempt and its LiME, pthread, topology, kernel-log,
    noise, and probe artifacts under `attempt-N/`;
@@ -284,15 +291,22 @@ Full-reset recovery is enabled by default. If an attempt fails before
 4. waits for every serial number to re-enumerate; and
 5. repeats only the same logical Benchkit run, up to three attempts by default.
 
-The recovery controls are `--recover-on-failure {none,full-reset}`,
-`--max-attempts-per-run`, `--recovery-reset-timeout-ms`,
-`--recovery-wait-seconds`, and `--recovery-settle-seconds`.
+The reset controls are `--reset-before-run`/`--no-reset-before-run`,
+`--recover-on-failure {none,full-reset}`, `--max-attempts-per-run`,
+`--recovery-reset-timeout-ms`, `--recovery-wait-seconds`, and
+`--recovery-settle-seconds`.
 
 Every attempt remains under `attempt-N/`, including the selected successful
 attempt. The run root contains `attempts.json`, `selected_attempt.txt`, a
 logical-run summary, and a convenience stdout copy. The shared resolver also
 understands historical campaigns in which the selected steady attempt was
 promoted to the run root.
+
+For a matrix that mixes camera counts, every CSV row reserves fields through
+the largest configured camera index. A single-camera row therefore leaves the
+`camera_1_*` fields empty instead of changing the header; subsequent
+multi-camera rows retain correct column alignment. The per-attempt JSON remains
+the authoritative raw record.
 
 A failure after `steady_state_begin` is a measured steady-state outcome. The
 runner resets all cameras to protect the following campaign point but does not

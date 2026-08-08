@@ -62,26 +62,31 @@ campaign:
 
 ### 2.1 Currently available cameras and dataset provenance
 
-The executable experiment scope is currently limited to one- and two-camera
-conditions because only two D435 units are available. Three- and four-camera
-scalability remains a planned extension and must not be inferred from the
-two-camera results.
+The completed baseline experiment scope is limited to one- and two-camera
+conditions using two D435 units. Three- and four-camera scalability must not
+be inferred from those results. Additional D415/D455 hardware is being
+registered for a separate multi-camera experiment; its identity registry is
+`tools/realsense_multi_camera_bench/known_cameras.json`.
 
 Camera serial numbers are part of the experimental condition, not incidental
 metadata. D435 devices expose distinct librealsense firmware serials and USB
 descriptor serials on this platform. The currently connected physical cameras
 map as follows:
 
-| librealsense firmware serial | USB descriptor serial | Raspberry Pi port |
+| model | librealsense optical serial | USB descriptor / ASIC serial |
 |---|---|---|
-| `948122073863` | `948123020218` | `3-1` |
-| `327122075717` | `328323144345` | `5-1` |
+| D435 | `948122073863` | `948123020218` |
+| D435 | `327122075717` | `328323144345` |
+| D415 | `228122060642` | `231523024158` |
+| D455 | `311322304911` | `327743060882` |
+| D455 | `311322302503` | `327743062558` |
+| D455 | `311322304863` | `327743063467` |
 
 Benchmark `--serial` arguments use `RS2_CAMERA_INFO_SERIAL_NUMBER`, namely the
-librealsense firmware serials. USB topology and recovery code may additionally
-record the descriptor serials. A difference between these two namespaces must
+librealsense optical-module serials. USB topology and power-control code record
+the descriptor/ASIC serials. A difference between these two namespaces must
 not be interpreted as a camera replacement. The 2026-07-30--31 baseline and
-the 2026-07-31 recovery rerun use the same two physical cameras.
+the 2026-07-31 recovery rerun use the same two physical D435 cameras.
 
 ## 3. Independent Variables
 

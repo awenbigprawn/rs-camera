@@ -25,6 +25,12 @@ from steady_settings import (
     DEFAULT_BROADCOM_VULKAN_ICD,
     DEFAULT_BUILD_DIR,
     DEFAULT_LIME,
+    DEFAULT_MAX_ATTEMPTS_PER_RUN,
+    DEFAULT_RECOVER_ON_FAILURE,
+    DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
+    DEFAULT_RECOVERY_SETTLE_SECONDS,
+    DEFAULT_RECOVERY_WAIT_SECONDS,
+    DEFAULT_RESET_BEFORE_RUN,
     DEFAULT_RESULTS_DIR,
     FIXED_CAMPAIGN_CONSTANTS,
     GPU_NOISE_MODES,
@@ -204,35 +210,56 @@ def main() -> None:
     parser.add_argument(
         "--recover-on-failure",
         choices=("none", "full-reset"),
-        default="full-reset",
+        default=DEFAULT_RECOVER_ON_FAILURE,
         help=(
             "Recover failed camera startup before continuing (default: full-reset). "
-            "A full reset covers every selected D435 composite USB device."
+            "A full reset covers every selected RealSense composite USB device."
+        ),
+    )
+    parser.add_argument(
+        "--reset-before-run",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RESET_BEFORE_RUN,
+        help=(
+            "full-reset every selected camera before attempt 1 of each logical "
+            "run so repetitions do not inherit pipeline state (default: enabled)"
         ),
     )
     parser.add_argument(
         "--recovery-reset-timeout-ms",
         type=int,
-        default=5000,
-        help="Per-camera D435 firmware reset timeout (default: 5000 ms)",
+        default=DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
+        help=(
+            "Per-camera RealSense firmware reset timeout "
+            f"(default: {DEFAULT_RECOVERY_RESET_TIMEOUT_MS} ms)"
+        ),
     )
     parser.add_argument(
         "--recovery-wait-seconds",
         type=float,
-        default=1.2,
-        help="Per-camera USB re-enumeration timeout (default: 1.2 s)",
+        default=DEFAULT_RECOVERY_WAIT_SECONDS,
+        help=(
+            "Per-camera USB re-enumeration timeout "
+            f"(default: {DEFAULT_RECOVERY_WAIT_SECONDS:g} s)"
+        ),
     )
     parser.add_argument(
         "--recovery-settle-seconds",
         type=float,
-        default=0.0,
-        help="Delay after resetting all cameras and before retry (default: 0 s)",
+        default=DEFAULT_RECOVERY_SETTLE_SECONDS,
+        help=(
+            "Delay after resetting all cameras and before retry "
+            f"(default: {DEFAULT_RECOVERY_SETTLE_SECONDS:g} s)"
+        ),
     )
     parser.add_argument(
         "--max-attempts-per-run",
         type=int,
-        default=3,
-        help="Maximum startup attempts for one logical Benchkit run (default: 3)",
+        default=DEFAULT_MAX_ATTEMPTS_PER_RUN,
+        help=(
+            "Maximum startup attempts for one logical Benchkit run "
+            f"(default: {DEFAULT_MAX_ATTEMPTS_PER_RUN})"
+        ),
     )
     parser.add_argument(
         "--cpu-noise-modes",
@@ -511,7 +538,7 @@ def main() -> None:
                     f"{profile}"
                 )
             case["probe"]["deadline_profile"] = str(profile)
-    if args.recover_on_failure == "full-reset":
+    if args.recover_on_failure == "full-reset" or args.reset_before_run:
         for case in cases:
             probe = case.get("probe", {})
             serials = probe.get("serials", probe.get("serial", []))
@@ -572,6 +599,7 @@ def main() -> None:
         usb_storage_block_size_kib=args.usb_storage_block_size_kib,
         usb_storage_ready_timeout_seconds=args.usb_storage_ready_timeout_seconds,
         recover_on_failure=args.recover_on_failure,
+        reset_before_run=args.reset_before_run,
         recovery_reset_timeout_ms=args.recovery_reset_timeout_ms,
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "serial_namespaces": {
+    "librealsense_serial": "D400 optical-module serial exposed as RS2_CAMERA_INFO_SERIAL_NUMBER; use this value for benchmark --serial arguments",
+    "usb_descriptor_serial": "D400 ASIC serial exposed through the USB iSerialNumber and Linux sysfs; use this value for USB-device discovery"
+  },
+  "cameras": [
+    {
+      "label": "d435_1",
+      "model": "D435",
+      "librealsense_name": "RealSense D435",
+      "product_id": "0b07",
+      "librealsense_serial": "948122073863",
+      "usb_descriptor_serial": "948123020218",
+      "firmware_version_last_seen": "5.17.3.10"
+    },
+    {
+      "label": "d435_2",
+      "model": "D435",
+      "librealsense_name": "RealSense D435",
+      "product_id": "0b07",
+      "librealsense_serial": "327122075717",
+      "usb_descriptor_serial": "328323144345",
+      "firmware_version_last_seen": "5.17.3.10"
+    },
+    {
+      "label": "d415_1",
+      "model": "D415",
+      "librealsense_name": "RealSense D415",
+      "product_id": "0ad3",
+      "librealsense_serial": "228122060642",
+      "usb_descriptor_serial": "231523024158",
+      "firmware_version_last_seen": "5.15.1"
+    },
+    {
+      "label": "d455_1",
+      "model": "D455",
+      "librealsense_name": "RealSense D455F",
+      "product_id": "0b5c",
+      "librealsense_serial": "311322304911",
+      "usb_descriptor_serial": "327743060882",
+      "firmware_version_last_seen": "5.15.0.2"
+    },
+    {
+      "label": "d455_2",
+      "model": "D455",
+      "librealsense_name": "RealSense D455F",
+      "product_id": "0b5c",
+      "librealsense_serial": "311322302503",
+      "usb_descriptor_serial": "327743062558",
+      "firmware_version_last_seen": "5.15.0.2"
+    },
+    {
+      "label": "d455_3",
+      "model": "D455",
+      "librealsense_name": "RealSense D455F",
+      "product_id": "0b5c",
+      "librealsense_serial": "311322304863",
+      "usb_descriptor_serial": "327743063467",
+      "firmware_version_last_seen": "5.15.0.2"
+    }
+  ]
+}

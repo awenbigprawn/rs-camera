@@ -154,6 +154,65 @@ class SteadyResultSchemaTest(unittest.TestCase):
         self.assertEqual(rows[0]["cpu_isolation_benchmark_cpus"], "1-3")
         self.assertIn("132", rows[0]["cpu_isolation_xhci_irqs"])
 
+    def test_single_and_multi_camera_rows_have_identical_fixed_columns(self):
+        run_variables = {
+            "policy": "other",
+            "cpu_noise": "none",
+            "memory_noise": "none",
+            "gpu_noise": "none",
+            "usb_storage_noise": "none",
+        }
+        single = _summary(None)
+        single["run"]["camera_count"] = 1
+        single["cameras"] = [
+            {
+                "index": 0,
+                "serial": "camera-a",
+                "delivery_interarrival_ms": {"p999": 16.8},
+                "storage": {"event_capacity": 100},
+            }
+        ]
+        multi = _summary(None)
+        multi["run"]["camera_count"] = 2
+        multi["cameras"] = [
+            *single["cameras"],
+            {
+                "index": 1,
+                "serial": "camera-b",
+                "delivery_interarrival_ms": {"p999": 17.0},
+                "storage": {"event_capacity": 200},
+            },
+        ]
+
+        rows = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, summary in enumerate((single, multi)):
+                record_dir = root / str(index)
+                record_dir.mkdir()
+                (record_dir / "steady_summary.json").write_text(
+                    json.dumps(summary) + "\n", encoding="utf-8"
+                )
+                rows.append(
+                    parse_steady_results(
+                        record_dir=record_dir,
+                        case={},
+                        run_variables=run_variables,
+                        backend_name="V4L2",
+                        policy_names={"other": "SCHED_OTHER"},
+                        drop_caches_configured=False,
+                        noise_suite=_NoiseSuite(),
+                        camera_result_slots=2,
+                    )
+                )
+
+        self.assertEqual(list(rows[0]), list(rows[1]))
+        self.assertEqual(rows[0]["camera_0_serial"], "camera-a")
+        self.assertEqual(rows[0]["camera_1_serial"], "")
+        self.assertEqual(rows[1]["camera_1_serial"], "camera-b")
+        self.assertEqual(rows[1]["camera_1_interarrival_ms_p999"], 17.0)
+        self.assertEqual(rows[1]["camera_1_storage_event_capacity"], 200)
+
 
 if __name__ == "__main__":
     unittest.main()

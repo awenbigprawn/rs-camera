@@ -13,6 +13,53 @@ from realsense_bench_common.artifacts import resolve_selected_attempt
 from realsense_bench_common.results import common_attempt_result_fields
 
 
+CAMERA_SCALAR_RESULT_KEYS = (
+    "serial",
+    "physical_port",
+    "usb_type",
+    "start_call_ms",
+    "stop_call_ms",
+    "warmup_deliveries",
+    "warmup_health_deliveries",
+    "warmup_observed_frames",
+    "warmup_duplicate_frames",
+    "warmup_sequence_gaps",
+    "warmup_out_of_order_frames",
+    "deliveries",
+    "frames",
+    "drops",
+    "timeouts",
+    "pre_measurement_timeouts",
+    "measurement_timeouts",
+    "observed_frames",
+    "unique_frames",
+    "duplicate_frames",
+    "sequence_gaps",
+    "nonadvancing_frames",
+    "out_of_order_frames",
+    "fully_fresh_framesets",
+    "partially_stale_framesets",
+    "stale_framesets",
+)
+CAMERA_INTERARRIVAL_RESULT_KEYS = (
+    "max",
+    "mean",
+    "min",
+    "n",
+    "p50",
+    "p90",
+    "p99",
+    "p999",
+    "stddev",
+)
+CAMERA_STORAGE_RESULT_KEYS = (
+    "allocated_event_capacity",
+    "delivery_capacity",
+    "event_capacity",
+    "stream_sample_capacity",
+)
+
+
 def flatten(prefix: str, value: Any, output: Dict[str, Any]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -68,49 +115,35 @@ def _add_noise_results(
 def _add_camera_results(
     result: Dict[str, Any],
     data: Mapping[str, Any],
+    camera_result_slots: int,
 ) -> None:
-    for camera in data.get("cameras", []):
-        index = camera.get("index", 0)
+    cameras_by_index = {
+        int(camera.get("index", 0)): camera
+        for camera in data.get("cameras", [])
+    }
+    unexpected = sorted(
+        index for index in cameras_by_index if not 0 <= index < camera_result_slots
+    )
+    if unexpected:
+        raise ValueError(
+            "camera result index exceeds the configured CSV schema: "
+            + ", ".join(str(index) for index in unexpected)
+        )
+
+    # Benchkit fixes its CSV header from the first result row.  Emit every
+    # configured camera slot even for a single-camera case so a later
+    # multi-camera row cannot shift columns beyond the original schema.
+    for index in range(camera_result_slots):
+        camera = cameras_by_index.get(index, {})
         prefix = f"camera_{index}"
-        for key in (
-            "serial",
-            "physical_port",
-            "usb_type",
-            "start_call_ms",
-            "stop_call_ms",
-            "warmup_deliveries",
-            "warmup_health_deliveries",
-            "warmup_observed_frames",
-            "warmup_duplicate_frames",
-            "warmup_sequence_gaps",
-            "warmup_out_of_order_frames",
-            "deliveries",
-            "frames",
-            "drops",
-            "timeouts",
-            "pre_measurement_timeouts",
-            "measurement_timeouts",
-            "observed_frames",
-            "unique_frames",
-            "duplicate_frames",
-            "sequence_gaps",
-            "nonadvancing_frames",
-            "out_of_order_frames",
-            "fully_fresh_framesets",
-            "partially_stale_framesets",
-            "stale_framesets",
-        ):
+        for key in CAMERA_SCALAR_RESULT_KEYS:
             result[f"{prefix}_{key}"] = camera.get(key, "")
-        flatten(
-            f"{prefix}_interarrival_ms",
-            camera.get("delivery_interarrival_ms", {}),
-            result,
-        )
-        flatten(
-            f"{prefix}_storage",
-            camera.get("storage", {}),
-            result,
-        )
+        interarrival = camera.get("delivery_interarrival_ms", {})
+        for key in CAMERA_INTERARRIVAL_RESULT_KEYS:
+            result[f"{prefix}_interarrival_ms_{key}"] = interarrival.get(key, "")
+        storage = camera.get("storage", {})
+        for key in CAMERA_STORAGE_RESULT_KEYS:
+            result[f"{prefix}_storage_{key}"] = storage.get(key, "")
 
 
 def _add_trace_results(result: Dict[str, Any], record_dir: Path) -> None:
@@ -155,6 +188,19 @@ def _add_kernel_results(result: Dict[str, Any], record_dir: Path) -> None:
     )
 
 
+def _add_pre_run_reset_results(
+    result: Dict[str, Any],
+    record_dir: Path,
+) -> None:
+    path = record_dir / "pre_run_reset.json"
+    data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    result["pre_run_reset_attempted"] = bool(data.get("attempted", False))
+    result["pre_run_reset_success"] = data.get("success", "")
+    result["pre_run_reset_camera_count"] = data.get("camera_count", 0)
+    result["pre_run_reset_duration_ms"] = data.get("duration_ms", 0.0)
+    result["pre_run_reset_error"] = data.get("error", "")
+
+
 def parse_steady_results(
     *,
     record_dir: Path,
@@ -165,7 +211,10 @@ def parse_steady_results(
     drop_caches_configured: bool,
     noise_suite: NoiseSuite,
     cpu_isolation_state: Mapping[str, Any] | None = None,
+    camera_result_slots: int = 1,
 ) -> Dict[str, Any]:
+    if camera_result_slots < 1:
+        raise ValueError("camera_result_slots must be at least one")
     path = record_dir / "steady_summary.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     selected = resolve_selected_attempt(record_dir)
@@ -279,7 +328,8 @@ def parse_steady_results(
         flatten("deadline", data["deadline"], result)
     if data.get("rate_monotonic") is not None:
         flatten("rate_monotonic", data["rate_monotonic"], result)
-    _add_camera_results(result, data)
+    _add_camera_results(result, data, camera_result_slots)
     _add_trace_results(result, selected_dir)
     _add_kernel_results(result, selected_dir)
+    _add_pre_run_reset_results(result, record_dir)
     return result

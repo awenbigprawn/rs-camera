@@ -10,6 +10,8 @@ import re
 import subprocess
 from typing import Any, Dict, List, Set
 
+from realsense_bench_common.realsense_devices import is_realsense_video_device
+
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 CPU_ONLINE_PATH = Path("/sys/devices/system/cpu/online")
@@ -143,20 +145,13 @@ class CpuIsolation:
                 return self.config.cgroup_root / relative
         raise RuntimeError("the current process is not in a cgroup-v2 hierarchy")
 
-    def _connected_d435_devices(self) -> List[Path]:
+    def _connected_realsense_devices(self) -> List[Path]:
         devices: List[Path] = []
         for path in sorted(self.config.usb_sysfs_base.glob("*")):
             if not path.is_dir():
                 continue
-            vendor = path / "idVendor"
-            product = path / "idProduct"
-            if not vendor.is_file() or not product.is_file():
-                continue
-            if self._read(vendor).lower() != "8086":
-                continue
-            if self._read(product).lower() != "0b07":
-                continue
-            devices.append(path)
+            if is_realsense_video_device(path):
+                devices.append(path)
         return devices
 
     def _interrupt_actions(self) -> Dict[str, int]:
@@ -176,10 +171,10 @@ class CpuIsolation:
         return actions
 
     def discover_camera_xhci_irqs(self) -> List[Dict[str, Any]]:
-        devices = self._connected_d435_devices()
+        devices = self._connected_realsense_devices()
         if not devices:
             raise RuntimeError(
-                "CPU isolation requires at least one connected D435 (8086:0b07)"
+                "CPU isolation requires at least one connected RealSense camera"
             )
         actions = self._interrupt_actions()
         by_irq: Dict[int, Dict[str, Any]] = {}

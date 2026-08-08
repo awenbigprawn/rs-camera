@@ -56,6 +56,7 @@ class _Recovery:
             enumeration_timeout_seconds=1.2,
         )
         self.calls = []
+        self.pre_run_calls = []
 
     def recover(self, cameras, record_dir):
         descriptors = [dict(camera) for camera in cameras]
@@ -71,6 +72,22 @@ class _Recovery:
             ],
         }
         (record_dir / "recovery.json").write_text(
+            json.dumps(result) + "\n", encoding="utf-8"
+        )
+        return result
+
+    def reset_before_run(self, cameras, record_dir):
+        descriptors = [dict(camera) for camera in cameras]
+        self.pre_run_calls.append(descriptors)
+        result = {
+            "attempted": True,
+            "method": "full-reset",
+            "operation": "pre-run-reset",
+            "success": True,
+            "camera_count": len(descriptors),
+            "duration_ms": 1.0,
+        }
+        (record_dir / "pre_run_reset.json").write_text(
             json.dumps(result) + "\n", encoding="utf-8"
         )
         return result
@@ -150,6 +167,35 @@ def _summary(*, success, measurement_start, error=""):
 
 
 class SteadyRunRetryTest(unittest.TestCase):
+    def test_pre_run_reset_covers_every_camera_before_attempt_one(self):
+        bench = _FakeSteadyBench(
+            [_summary(success=True, measurement_start=123456)]
+        )
+        bench._reset_before_run = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            bench.single_run(
+                case_id="two-camera",
+                policy="other",
+                cpu_noise="none",
+                memory_noise="none",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+
+            self.assertEqual(len(bench._recovery.pre_run_calls), 1)
+            self.assertEqual(
+                [
+                    camera["serial"]
+                    for camera in bench._recovery.pre_run_calls[0]
+                ],
+                ["camera-a", "camera-b"],
+            )
+            self.assertEqual(bench._recovery.calls, [])
+            self.assertTrue((record_dir / "pre_run_reset.json").is_file())
+
     def test_startup_failure_resets_both_cameras_and_retries_same_run(self):
         bench = _FakeSteadyBench(
             [

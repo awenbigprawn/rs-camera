@@ -23,6 +23,12 @@ from realsense_bench_common.settings import (  # noqa: E402
     CPU_LOCK_SCRIPT as CPU_FREQ_LOCK_SCRIPT,
     CPU_RESTORE_SCRIPT as CPU_FREQ_RESTORE_SCRIPT,
     DEFAULT_LIME,
+    DEFAULT_MAX_ATTEMPTS_PER_RUN,
+    DEFAULT_RECOVER_ON_FAILURE,
+    DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
+    DEFAULT_RECOVERY_SETTLE_SECONDS,
+    DEFAULT_RECOVERY_WAIT_SECONDS,
+    DEFAULT_RESET_BEFORE_RUN,
     PAPER_BACKEND as CAMPAIGN_BACKEND,
     PAPER_CPU_FREQUENCY_MHZ as CAMPAIGN_CPU_FREQUENCY_MHZ,
     PAPER_DROP_CACHES_BEFORE_RUN as CAMPAIGN_DROP_CACHES_BEFORE_RUN,
@@ -102,6 +108,7 @@ class RealSenseStartupBench(Benchmark):
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
         max_attempts_per_run: int,
+        reset_before_run: bool,
         use_sudo: bool,
     ) -> None:
         memory_cleanup_hook = DropCachesBeforeRun(use_sudo=use_sudo)
@@ -130,6 +137,7 @@ class RealSenseStartupBench(Benchmark):
         self._recovery_wait_seconds = recovery_wait_seconds
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
+        self._reset_before_run = reset_before_run
         self._use_sudo = use_sudo
         self._rsusb_backend = CAMPAIGN_BACKEND == "rsusb"
         self._rsusb_usb_device = CAMPAIGN_RSUSB_USB_DEVICE
@@ -185,11 +193,14 @@ class RealSenseStartupBench(Benchmark):
         if self._drop_caches_before_run:
             self._memory_cleanup_hook.validate()
         if (
-            self._recover_on_failure in ("usb", "full-reset")
+            (
+                self._recover_on_failure in ("usb", "full-reset")
+                or self._reset_before_run
+            )
             and shutil.which("usbreset") is None
         ):
             raise RuntimeError(
-                "usbreset is required for --recover-on-failure usb/full-reset."
+                "usbreset is required for RealSense full-device reset."
             )
         if self._recover_on_failure == "depth-prime" and shutil.which("v4l2-ctl") is None:
             raise RuntimeError("v4l2-ctl is required for --recover-on-failure depth-prime.")
@@ -492,6 +503,7 @@ class RealSenseStartupBench(Benchmark):
         **kwargs: Any,
     ) -> str:
         cycle_delay_ms = CAMPAIGN_CYCLE_DELAY_MS
+        reset_before_run = getattr(self, "_reset_before_run", False)
         record_dir = Path(record_data_dir).resolve()
         record_dir.mkdir(parents=True, exist_ok=True)
         if any(record_dir.glob("attempt-*")):
@@ -522,6 +534,7 @@ class RealSenseStartupBench(Benchmark):
             "recovery_wait_seconds": self._recovery_wait_seconds,
             "recovery_settle_seconds": self._recovery_settle_seconds,
             "max_attempts_per_run": self._max_attempts_per_run,
+            "reset_before_run": reset_before_run,
             "rsusb_usb_device": self._rsusb_usb_device,
             "rsusb_prepare_timeout_seconds": self._rsusb_prepare_timeout_seconds,
             "rsusb_unbind_settle_seconds": self._rsusb_unbind_settle_seconds,
@@ -537,6 +550,21 @@ class RealSenseStartupBench(Benchmark):
             json.dumps(base_manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+        if reset_before_run:
+            recovery = MultiCameraFullReset(
+                CameraRecoveryConfig(
+                    repo_root=REPO_ROOT,
+                    reset_probe=self._probe,
+                    use_sudo=self._use_sudo,
+                    reset_timeout_ms=self._recovery_reset_timeout_ms,
+                    enumeration_timeout_seconds=self._recovery_wait_seconds,
+                )
+            )
+            recovery.reset_before_run(
+                [{"serial": self._serial}],
+                record_dir,
+            )
 
         def run_attempt(
             attempt: int, attempt_dir: Path
@@ -659,6 +687,12 @@ class RealSenseStartupBench(Benchmark):
         frequency_before = cpu_frequency.get("before_run", {})
         frequency_after = cpu_frequency.get("after_run", {})
         frequency_policies = frequency_before.get("policies", [])
+        pre_run_reset_path = record_dir / "pre_run_reset.json"
+        pre_run_reset = (
+            json.loads(pre_run_reset_path.read_text(encoding="utf-8"))
+            if pre_run_reset_path.is_file()
+            else {}
+        )
         memory_cleanup = memory_cleanup_result_fields(
             record_dir,
             configured=getattr(self, "_drop_caches_before_run", False),
@@ -668,6 +702,13 @@ class RealSenseStartupBench(Benchmark):
         return {
             **memory_cleanup,
             **common_attempt_result_fields(summary),
+            "pre_run_reset_attempted": bool(
+                pre_run_reset.get("attempted", False)
+            ),
+            "pre_run_reset_success": pre_run_reset.get("success", ""),
+            "pre_run_reset_camera_count": pre_run_reset.get("camera_count", 0),
+            "pre_run_reset_duration_ms": pre_run_reset.get("duration_ms", 0.0),
+            "pre_run_reset_error": pre_run_reset.get("error", ""),
             "librealsense_backend": "rsusb" if self._rsusb_backend else "v4l2",
             "cpu_frequency_requested_mhz": frequency_before.get("requested_mhz", ""),
             "cpu_frequency_locked": frequency_before.get("locked", False),
@@ -791,41 +832,57 @@ def main() -> None:
     parser.add_argument(
         "--recovery-reset-timeout-ms",
         type=int,
-        default=5000,
+        default=DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
         help=(
-            "D435 firmware reconnect timeout during full-reset recovery "
-            "(default: 5000 ms)."
+            "RealSense firmware reset timeout during full-reset recovery "
+            f"(default: {DEFAULT_RECOVERY_RESET_TIMEOUT_MS} ms)."
         ),
     )
     parser.add_argument(
         "--recover-on-failure",
         choices=("none", "usb", "depth-prime", "full-reset"),
-        default="none",
+        default=DEFAULT_RECOVER_ON_FAILURE,
         help=(
-            "After recording a failed run, recover before continuing; full-reset "
-            "resets D435 firmware and the complete composite USB device."
+            "After recording a failed attempt, recover and retry the same logical "
+            "run; full-reset resets RealSense firmware and the complete composite "
+            f"USB device (default: {DEFAULT_RECOVER_ON_FAILURE})."
+        ),
+    )
+    parser.add_argument(
+        "--reset-before-run",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RESET_BEFORE_RUN,
+        help=(
+            "full-reset the selected camera before attempt 1 of each logical "
+            "run (default: enabled)"
         ),
     )
     parser.add_argument(
         "--recovery-wait-seconds",
         type=float,
-        default=1.2,
+        default=DEFAULT_RECOVERY_WAIT_SECONDS,
         help=(
             "How long to wait for the reset camera to become enumerable "
-            "(default: 1.2 secs)."
+            f"(default: {DEFAULT_RECOVERY_WAIT_SECONDS:g} secs)."
         ),
     )
     parser.add_argument(
         "--recovery-settle-seconds",
         type=float,
-        default=0.0,
-        help="Wait after recovery before retrying the same run (default: 0 secs).",
+        default=DEFAULT_RECOVERY_SETTLE_SECONDS,
+        help=(
+            "Wait after recovery before retrying the same run "
+            f"(default: {DEFAULT_RECOVERY_SETTLE_SECONDS:g} secs)."
+        ),
     )
     parser.add_argument(
         "--max-attempts-per-run",
         type=int,
-        default=1,
-        help="Maximum measured attempts for one Benchkit repetition (default: 1).",
+        default=DEFAULT_MAX_ATTEMPTS_PER_RUN,
+        help=(
+            "Maximum measured attempts for one Benchkit repetition "
+            f"(default: {DEFAULT_MAX_ATTEMPTS_PER_RUN})."
+        ),
     )
     parser.add_argument("--nb-runs", type=int, default=1)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
@@ -866,6 +923,8 @@ def main() -> None:
         parser.error("--max-attempts-per-run must be positive")
     if args.max_attempts_per_run > 1 and args.recover_on_failure == "none":
         parser.error("multiple attempts require --recover-on-failure")
+    if args.reset_before_run and not args.serial:
+        parser.error("--reset-before-run requires an explicit --serial")
 
     use_sudo = os.geteuid() != 0 and not args.no_sudo
     args.results_dir.mkdir(parents=True, exist_ok=True)
@@ -883,6 +942,7 @@ def main() -> None:
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,
         max_attempts_per_run=args.max_attempts_per_run,
+        reset_before_run=args.reset_before_run,
         use_sudo=use_sudo,
     )
     campaign = CampaignCartesianProduct(

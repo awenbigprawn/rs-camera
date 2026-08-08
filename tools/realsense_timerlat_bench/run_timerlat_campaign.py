@@ -22,6 +22,14 @@ sys.path.insert(0, str(STEADY_TOOL_DIR))
 sys.path.insert(0, str(TOOL_DIR))
 
 from benchkit.campaign import CampaignCartesianProduct  # noqa: E402
+from realsense_bench_common.settings import (  # noqa: E402
+    DEFAULT_MAX_ATTEMPTS_PER_RUN,
+    DEFAULT_RECOVER_ON_FAILURE,
+    DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
+    DEFAULT_RECOVERY_SETTLE_SECONDS,
+    DEFAULT_RECOVERY_WAIT_SECONDS,
+    DEFAULT_RESET_BEFORE_RUN,
+)
 from timerlat_benchmark import RealSenseTimerlatBench  # noqa: E402
 from timerlat_settings import (  # noqa: E402
     CAMPAIGN_CPU_NOISE_WORKERS,
@@ -123,12 +131,33 @@ def main() -> None:
     parser.add_argument(
         "--recover-on-failure",
         choices=("none", "full-reset"),
-        default="full-reset",
+        default=DEFAULT_RECOVER_ON_FAILURE,
     )
-    parser.add_argument("--recovery-reset-timeout-ms", type=int, default=5000)
-    parser.add_argument("--recovery-wait-seconds", type=float, default=1.2)
-    parser.add_argument("--recovery-settle-seconds", type=float, default=0.0)
-    parser.add_argument("--max-attempts-per-run", type=int, default=3)
+    parser.add_argument(
+        "--reset-before-run",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RESET_BEFORE_RUN,
+    )
+    parser.add_argument(
+        "--recovery-reset-timeout-ms",
+        type=int,
+        default=DEFAULT_RECOVERY_RESET_TIMEOUT_MS,
+    )
+    parser.add_argument(
+        "--recovery-wait-seconds",
+        type=float,
+        default=DEFAULT_RECOVERY_WAIT_SECONDS,
+    )
+    parser.add_argument(
+        "--recovery-settle-seconds",
+        type=float,
+        default=DEFAULT_RECOVERY_SETTLE_SECONDS,
+    )
+    parser.add_argument(
+        "--max-attempts-per-run",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS_PER_RUN,
+    )
     parser.add_argument(
         "--build-jobs",
         type=int,
@@ -167,6 +196,7 @@ def main() -> None:
         rtla=args.rtla,
         use_sudo=not args.no_sudo,
         recover_on_failure=args.recover_on_failure,
+        reset_before_run=args.reset_before_run,
         recovery_reset_timeout_ms=args.recovery_reset_timeout_ms,
         recovery_wait_seconds=args.recovery_wait_seconds,
         recovery_settle_seconds=args.recovery_settle_seconds,

@@ -109,6 +109,7 @@ class RealSenseSteadyBench(Benchmark):
         usb_storage_block_size_kib: int,
         usb_storage_ready_timeout_seconds: float,
         recover_on_failure: str,
+        reset_before_run: bool,
         recovery_reset_timeout_ms: int,
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
@@ -125,6 +126,15 @@ class RealSenseSteadyBench(Benchmark):
             post_run_hooks=(),
         )
         self._cases = {case["case_id"]: case for case in cases}
+        self._camera_result_slots = max(
+            int(
+                case.get("probe", {}).get(
+                    "camera_count",
+                    case.get("physical", {}).get("camera_count", 1),
+                )
+            )
+            for case in cases
+        )
         self._build_dir = build_dir.resolve()
         self._lime = lime.resolve()
         self._priority = CAMPAIGN_RT_PRIORITY
@@ -144,6 +154,7 @@ class RealSenseSteadyBench(Benchmark):
         self._reset_probe = self._build_dir / "d435_sensor_probe"
         self._tracer = self._build_dir / "libtrace_pthreads.so"
         self._recover_on_failure = recover_on_failure
+        self._reset_before_run = reset_before_run
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
         self._recovery = MultiCameraFullReset(
@@ -252,7 +263,7 @@ class RealSenseSteadyBench(Benchmark):
         if self._drop_caches_before_run:
             self._memory_cleanup_hook.validate()
         self._noise_suite.validate_environment()
-        if self._recover_on_failure == "full-reset":
+        if self._recover_on_failure == "full-reset" or self._reset_before_run:
             self._recovery.validate_environment()
         self._system_controls.validate_environment()
         if self._overrun_kernel_trace:
@@ -657,6 +668,7 @@ class RealSenseSteadyBench(Benchmark):
         **kwargs: Any,
     ) -> str:
         case = self._cases[case_id]
+        reset_before_run = getattr(self, "_reset_before_run", False)
         record_dir = Path(record_data_dir).resolve()
         record_dir.mkdir(parents=True, exist_ok=True)
         if any(record_dir.glob("attempt-*")):
@@ -690,6 +702,7 @@ class RealSenseSteadyBench(Benchmark):
             "cpu_isolation": self._system_controls.cpu_isolation_state(),
             "drop_caches_before_attempt": self._drop_caches_before_run,
             "recover_on_failure": self._recover_on_failure,
+            "reset_before_run": reset_before_run,
             "recovery_reset_timeout_ms": self._recovery.config.reset_timeout_ms,
             "recovery_wait_seconds": (
                 self._recovery.config.enumeration_timeout_seconds
@@ -716,6 +729,12 @@ class RealSenseSteadyBench(Benchmark):
             json.dumps(base_manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+        if reset_before_run:
+            self._recovery.reset_before_run(
+                camera_descriptors(case, {}),
+                record_dir,
+            )
 
         def run_attempt(
             attempt: int, attempt_dir: Path
@@ -762,6 +781,7 @@ class RealSenseSteadyBench(Benchmark):
             drop_caches_configured=self._drop_caches_before_run,
             noise_suite=self._noise_suite,
             cpu_isolation_state=self._system_controls.cpu_isolation_state(),
+            camera_result_slots=self._camera_result_slots,
         )
         if not bool(result.get("success", False)):
             self._logical_failures.append(

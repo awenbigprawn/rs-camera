@@ -33,14 +33,18 @@ class SystemControlsUsbPowerTest(unittest.TestCase):
             )
         )
 
-    def test_enforces_power_control_on_for_every_connected_d435(self):
+    def test_enforces_power_control_for_mixed_d400_models(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for name, serial in (("3-1", "camera-a"), ("5-1", "camera-b")):
+            for name, serial, product in (
+                ("3-1", "camera-a", "0b07"),
+                ("5-1", "camera-b", "0b5c"),
+                ("5-2", "camera-c", "0ad3"),
+            ):
                 device = root / "usb-devices" / name
                 (device / "power").mkdir(parents=True)
                 (device / "idVendor").write_text("8086\n", encoding="utf-8")
-                (device / "idProduct").write_text("0b07\n", encoding="utf-8")
+                (device / "idProduct").write_text(product + "\n", encoding="utf-8")
                 (device / "serial").write_text(serial + "\n", encoding="utf-8")
                 (device / "power" / "control").write_text(
                     "auto\n", encoding="utf-8"
@@ -49,7 +53,10 @@ class SystemControlsUsbPowerTest(unittest.TestCase):
             output = root / "autosuspend.json"
             states = self._controls(root)._enforce_realsense_autosuspend(output)
 
-            self.assertEqual(len(states), 2)
+            self.assertEqual(len(states), 3)
+            self.assertEqual(
+                {state["model"] for state in states}, {"D415", "D435", "D455"}
+            )
             self.assertTrue(output.is_file())
             self.assertEqual(
                 (root / "usb-devices" / "3-1" / "power" / "control")

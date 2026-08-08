@@ -94,5 +94,10 @@ __pycache__/
 # Generated steady-state benchmark data
 /tools/realsense_steady_bench/results/
 
+# Generated multi-camera layouts, profiles, and benchmark data
+/tools/realsense_multi_camera_bench/layout-*.json
+/tools/realsense_multi_camera_bench/profiles/
+/tools/realsense_multi_camera_bench/results/
+
 # Raspberry Pi campaign results and system backups
 /results/

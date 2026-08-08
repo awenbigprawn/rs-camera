@@ -117,28 +117,35 @@ platform or firmware version. Change the fixed campaign constant only after a
 separate calibration campaign; do not mix delay exploration with the paper's
 scheduling-policy comparison.
 
-For a persistent `Frame didn't arrive within N` state, use
-`--recover-on-failure full-reset`. It first sends the D435 firmware hardware
-reset and waits for disconnect/reconnect, then applies `usbreset` to the
-re-enumerated parent USB device. The D435 is a composite USB device, so this
-host reset covers its depth, RGB, and infrared UVC interfaces together.
+Full-device reset is applied before attempt 1 of every logical run by default.
+It first sends a RealSense firmware hardware reset and waits for
+disconnect/reconnect, then applies `usbreset` to the re-enumerated parent USB
+device. A RealSense camera is a composite USB device, so this host reset covers
+its depth, RGB, and infrared UVC interfaces together. This pre-run reset keeps
+one pipeline lifecycle from contaminating the next benchmark point.
+
+If a `Frame didn't arrive within N` or another startup failure still occurs,
+the same full-device reset runs again before retrying only that logical run.
+Use `--no-reset-before-run` only for diagnosis; it is not a formal campaign
+setting.
 
 With `--recover-on-failure depth-prime`, a failed workload and all of its traces
 are written first. The runner then resolves `RS2_CAMERA_INFO_PHYSICAL_PORT` to
 the selected camera's depth video node and performs a complete raw 848x480 Z16
 V4L2 lifecycle: STREAMON, dequeue ten frames, and STREAMOFF. This recovery was
 observed to restore librealsense after USB reset and USB reauthorization did not.
-The recovery is not part of the measured workload and is intentionally opt-in
-because it changes system state. `--recover-on-failure usb` remains available as
-a separate host-side reset experiment.
+The recovery is not part of the measured workload. The legacy
+`--recover-on-failure usb` and `depth-prime` modes remain available as separate
+diagnostic experiments; `none` is an explicit debugging opt-out and should not
+be used for a formal campaign.
 
 Set `--max-attempts-per-run N` to retry the identical Benchkit point after
 recovery. For example, with N=3, a frame timeout in `attempt-1` triggers the
 selected recovery, the `--recovery-settle-seconds` delay, and then `attempt-2`
 with the same policy, quiescence delay, cycle count, and repetition number. Every failed
-attempt remains available for analysis. The default is one attempt, so recovery
-alone prepares the camera for the next point but does not repeat the current
-point.
+attempt remains available for analysis. The default is three attempts with
+full reset, so a failed pipeline transition cannot contaminate the following
+Benchkit point.
 
 When not already root, run `sudo -v` first. The runner uses sudo around LiME and
 uses the cached credential non-interactively to capture each run's kernel-log
@@ -149,6 +156,7 @@ one camera with --serial SERIAL.
 For a short functional campaign:
 
     .venv/bin/python tools/realsense_startup_bench/run_startup_campaign.py \
+      --serial CAMERA_SERIAL \
       --policies other --cycles 2 --frames 2 --nb-runs 1
 
 The bounded workload and join timeout reduce the risk of leaving a high-priority

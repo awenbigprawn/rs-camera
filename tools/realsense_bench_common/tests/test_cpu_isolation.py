@@ -38,10 +38,10 @@ class CameraIrqDiscoveryTest(unittest.TestCase):
             usb_sysfs.mkdir()
             proc_root.mkdir()
 
-            for index, (usb_device, controller_name, roots) in enumerate(
+            for index, (usb_device, controller_name, roots, product_id) in enumerate(
                 (
-                    ("3-1", "xhci-hcd.0", ("usb2", "usb3")),
-                    ("5-1", "xhci-hcd.1", ("usb4", "usb5")),
+                    ("3-1", "xhci-hcd.0", ("usb2", "usb3"), "0b5c"),
+                    ("5-1", "xhci-hcd.1", ("usb4", "usb5"), "0ad3"),
                 )
             ):
                 controller = devices / controller_name
@@ -50,7 +50,7 @@ class CameraIrqDiscoveryTest(unittest.TestCase):
                 target = controller / roots[-1] / usb_device
                 target.mkdir()
                 (target / "idVendor").write_text("8086\n", encoding="utf-8")
-                (target / "idProduct").write_text("0b07\n", encoding="utf-8")
+                (target / "idProduct").write_text(product_id + "\n", encoding="utf-8")
                 (target / "serial").write_text(
                     f"usb-serial-{index}\n", encoding="utf-8"
                 )

@@ -12,6 +12,15 @@ import subprocess
 import time
 from typing import Any, Dict, List
 
+import sys
+
+TOOLS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS_DIR))
+
+from realsense_bench_common.realsense_devices import (  # noqa: E402
+    discover_realsense_devices,
+)
+
 
 def command(arguments: List[str]) -> Dict[str, Any]:
     try:
@@ -71,28 +80,24 @@ def parse_interrupts(raw: str) -> Dict[str, Any]:
 
 
 def realsense_usb_devices() -> List[Dict[str, str]]:
-    devices = []
-    for path in sorted(Path("/sys/bus/usb/devices").glob("*")):
-        if text(path / "idVendor").strip().lower() != "8086":
-            continue
-        product = text(path / "product").strip()
-        manufacturer = text(path / "manufacturer").strip()
-        if "realsense" not in f"{manufacturer} {product}".lower():
-            continue
-        devices.append(
-            {
-                "sysfs_name": path.name,
-                "vendor": text(path / "idVendor").strip(),
-                "product_id": text(path / "idProduct").strip(),
-                "manufacturer": manufacturer,
-                "product": product,
-                "serial": text(path / "serial").strip(),
-                "speed_mbps": text(path / "speed").strip(),
-                "power_control": text(path / "power" / "control").strip(),
-                "runtime_status": text(path / "power" / "runtime_status").strip(),
-            }
-        )
-    return devices
+    records = discover_realsense_devices(Path("/sys/bus/usb/devices"))
+    return [
+        {
+            "sysfs_name": str(record["usb_device"]),
+            "vendor": str(record["vendor_id"]),
+            "product_id": str(record["product_id"]),
+            "manufacturer": str(record["manufacturer"]),
+            "product": str(record["product"]),
+            "model": str(record["model"]),
+            "serial": str(record["serial"]),
+            "speed_mbps": str(record["speed_mbps"]),
+            "power_control": str(record["power_control"]),
+            "runtime_status": str(record["runtime_status"]),
+            "upstream_hub": str(record["upstream_hub"]),
+            "xhci_controller": str(record["xhci_controller"]),
+        }
+        for record in records
+    ]
 
 
 def main() -> None:

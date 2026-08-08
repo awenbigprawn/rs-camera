@@ -99,6 +99,7 @@ class RealSenseTimerlatBench(Benchmark):
         rtla: str,
         use_sudo: bool,
         recover_on_failure: str,
+        reset_before_run: bool,
         recovery_reset_timeout_ms: int,
         recovery_wait_seconds: float,
         recovery_settle_seconds: float,
@@ -122,6 +123,7 @@ class RealSenseTimerlatBench(Benchmark):
         self._rtla = rtla
         self._use_sudo = use_sudo
         self._recover_on_failure = recover_on_failure
+        self._reset_before_run = reset_before_run
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
         self._build_jobs = build_jobs
@@ -230,7 +232,9 @@ class RealSenseTimerlatBench(Benchmark):
             case.get("noise", {}).get("cpu") == "busy_loop"
             for case in self._cases.values()
         )
-        if camera_enabled and self._recover_on_failure == "full-reset":
+        if camera_enabled and (
+            self._recover_on_failure == "full-reset" or self._reset_before_run
+        ):
             self._recovery.validate_environment()
         targets: list[str] = []
         if camera_enabled:
@@ -465,6 +469,7 @@ class RealSenseTimerlatBench(Benchmark):
         self, load_case: str, record_data_dir: Path, **_kwargs: Any
     ) -> str:
         case = self._cases[load_case]
+        reset_before_run = getattr(self, "_reset_before_run", False)
         record_dir = Path(record_data_dir).resolve()
         record_dir.mkdir(parents=True, exist_ok=True)
         if any(record_dir.glob("attempt-*")):
@@ -489,10 +494,20 @@ class RealSenseTimerlatBench(Benchmark):
                 str(case.get("noise", {}).get("cpu", "none"))
             ),
             "recover_on_failure": self._recover_on_failure,
+            "reset_before_run": reset_before_run,
             "max_attempts_per_run": self._max_attempts_per_run,
         }
         _write_json(record_dir / "run_manifest.json", base_manifest)
         camera_enabled = bool(case.get("camera", {}).get("enabled"))
+        if camera_enabled and reset_before_run:
+            camera_count = int(case.get("camera", {}).get("count", 0))
+            self._recovery.reset_before_run(
+                [
+                    {"serial": serial}
+                    for serial in self._serials[:camera_count]
+                ],
+                record_dir,
+            )
 
         def run_attempt(
             attempt: int, attempt_dir: Path
@@ -560,6 +575,12 @@ class RealSenseTimerlatBench(Benchmark):
         timerlat_global = summary.get("timerlat", {}).get("global", {})
         camera = summary.get("camera", {})
         aggregate = camera.get("aggregate", {})
+        pre_run_reset_path = record_dir / "pre_run_reset.json"
+        pre_run_reset = (
+            json.loads(pre_run_reset_path.read_text(encoding="utf-8"))
+            if pre_run_reset_path.is_file()
+            else {}
+        )
         noise = self._cpu_noise.artifacts(
             str(summary.get("cpu_noise_mode", "none")), selected.data_dir
         )
@@ -572,6 +593,13 @@ class RealSenseTimerlatBench(Benchmark):
                 selected.data_dir, configured=self._drop_caches
             ),
             **common_attempt_result_fields(summary),
+            "pre_run_reset_attempted": bool(
+                pre_run_reset.get("attempted", False)
+            ),
+            "pre_run_reset_success": pre_run_reset.get("success", ""),
+            "pre_run_reset_camera_count": pre_run_reset.get("camera_count", 0),
+            "pre_run_reset_duration_ms": pre_run_reset.get("duration_ms", 0.0),
+            "pre_run_reset_error": pre_run_reset.get("error", ""),
             "success": success,
             "error": error,
             "load_case": run_variables["load_case"],

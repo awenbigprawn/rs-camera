@@ -119,11 +119,13 @@ sudo -v
   --results-dir tools/realsense_timerlat_bench/results/preempt_rt_5min_5rep
 ```
 
-For camera cases the runner starts the steady probe first and waits for its
-`steady_state_begin` phase marker before launching Timerlat. If either selected
-camera fails before that barrier, the failed attempt is retained, both complete
-D435 USB devices are reset, and only that logical run is retried. A failure
-after the barrier is retained as a measured failure and is not retried.
+For camera cases, every selected camera receives a firmware and composite-USB
+reset before attempt 1. The runner then starts the steady probe and waits for
+its `steady_state_begin` phase marker before launching Timerlat. If any selected
+camera fails before that barrier, the failed attempt is retained, all complete
+RealSense USB devices are reset again, and only that logical run is retried. A
+failure after the barrier is retained as a measured failure and is not retried.
+`--no-reset-before-run` is a diagnostic opt-out only.
 
 ## Results
 

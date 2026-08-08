@@ -13,6 +13,8 @@ on Intel RealSense cameras.
 - tools/realsense_thread_trace/: pthread lifecycle tracer and visualization
   tools.
 - tools/realsense_steady_bench/: steady-state frame, thread, and USB scaling campaign.
+- tools/realsense_multi_camera_bench/: topology-aware D415/D435/D455 suite
+  generator and modeled-profile workflow built on the steady campaign.
 - tools/realsense_timerlat_bench/: independent RTLA Timerlat platform-latency
   matrix for non-RT and PREEMPT_RT kernels.
 - tools/realsense_bench_common/: shared Benchkit settings, commands, retries,
@@ -141,6 +143,13 @@ Memory-bandwidth contention is available separately as fixed-size copies
 between thread-private buffers. Select it with
 `--memory-noise-modes none fixed_copy`, then fix the worker count and per-buffer
 size with `--memory-noise-workers N` and `--memory-noise-buffer-size-mib M`.
+
+For powered-hub, camera-count, and heterogeneous-model experiments, use the
+preflight and suite generator in
+`tools/realsense_multi_camera_bench/README.md`. It freezes serial-to-hub
+placement, rejects USB 2 fallback and topology drift, and generates exact
+per-case serial lists while retaining the steady campaign's warm-up, recovery,
+freshness, scheduling, and tracing behavior.
 
 ## Timerlat platform campaign
 

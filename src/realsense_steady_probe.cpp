@@ -53,7 +53,7 @@ using rs_camera::steady::warmup_health_error;
 struct options
 {
     std::vector<std::string> serials;
-    std::string stream_mode = "d435_all";
+    std::string stream_mode = "stereo_all";
     std::string delivery = "wait";
     std::string summary_output;
     std::string events_output;
@@ -188,7 +188,8 @@ options parse_args(int argc, char **argv)
                 << "Usage: " << argv[0] << " [options]\n"
                 << "  --serial SERIAL              Repeat for each selected camera\n"
                 << "  --camera-count N             Select the first N cameras when serials are omitted\n"
-                << "  --stream-mode depth|depth_color|d435_all\n"
+                << "  --stream-mode depth|depth_color|stereo_all\n"
+                << "      d435_all remains a compatibility alias for stereo_all\n"
                 << "  --delivery wait|callback\n"
                 << "  --frames N                   Measured deliveries per camera\n"
                 << "  --measurement-duration-ms N Measure for a fixed wall-clock duration; zero uses --frames\n"
@@ -339,19 +340,21 @@ uint64_t wait_for_measurement_gate(const options &opts, shared_control &control)
 
 void configure_streams(rs2::config &config, const options &opts, const std::string &serial)
 {
+    const bool stereo_all =
+        opts.stream_mode == "stereo_all" || opts.stream_mode == "d435_all";
     config.enable_device(serial);
     config.enable_stream(
         RS2_STREAM_DEPTH, opts.depth_width, opts.depth_height, RS2_FORMAT_Z16, opts.fps);
     if (opts.stream_mode == "depth")
         return;
-    if (opts.stream_mode == "depth_color" || opts.stream_mode == "d435_all")
+    if (opts.stream_mode == "depth_color" || stereo_all)
     {
         config.enable_stream(
             RS2_STREAM_COLOR, opts.color_width, opts.color_height, RS2_FORMAT_RGB8, opts.fps);
     }
     else
         throw std::runtime_error("Unsupported stream mode: " + opts.stream_mode);
-    if (opts.stream_mode == "d435_all")
+    if (stereo_all)
     {
         config.enable_stream(RS2_STREAM_INFRARED,
                              1,

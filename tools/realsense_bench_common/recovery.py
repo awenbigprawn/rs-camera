@@ -70,7 +70,12 @@ class MultiCameraFullReset:
         return ""
 
     def _probe_can_find_serial(self, serial: str, timeout_seconds: float) -> tuple[bool, str]:
-        command = [str(self.config.reset_probe), "--list-only", "--serial", serial]
+        command = [
+            str(self.config.reset_probe),
+            "--device-present",
+            "--serial",
+            serial,
+        ]
         try:
             completed = subprocess.run(
                 command,
@@ -123,7 +128,7 @@ class MultiCameraFullReset:
                 }
             )
             if not result["success"]:
-                result["error"] = "D435 firmware hardware reset did not complete"
+                result["error"] = "RealSense firmware hardware reset did not complete"
         except (OSError, subprocess.TimeoutExpired) as error:
             result["error"] = f"{type(error).__name__}: {error}"
         return result
@@ -199,7 +204,7 @@ class MultiCameraFullReset:
             result["error"] = "camera serial is missing"
             return result
 
-        print(f"[RECOVERY] resetting D435 firmware serial={serial}")
+        print(f"[RECOVERY] resetting RealSense firmware serial={serial}")
         firmware = self._firmware_reset(serial)
         result["hardware_reset"] = firmware
         if not physical_port:
@@ -267,4 +272,30 @@ class MultiCameraFullReset:
             json.dumps(result, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        return result
+
+    def reset_before_run(
+        self,
+        cameras: Iterable[Mapping[str, Any]],
+        record_dir: Path,
+    ) -> Dict[str, Any]:
+        """Establish a clean composite-device state before a logical run."""
+
+        print("[PRE-RUN-RESET] resetting every selected RealSense camera")
+        started = time.monotonic()
+        result = self.recover(cameras, record_dir / "pre_run_reset")
+        result = {
+            **result,
+            "operation": "pre-run-reset",
+            "duration_ms": (time.monotonic() - started) * 1000.0,
+        }
+        (record_dir / "pre_run_reset.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if not result.get("success", False):
+            raise RuntimeError(
+                "pre-run RealSense full reset failed: "
+                + str(result.get("error", "unknown error"))
+            )
         return result

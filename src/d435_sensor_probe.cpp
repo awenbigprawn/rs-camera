@@ -46,6 +46,7 @@ struct options
     bool try_all_ir = true;
     bool strict_streams = false;
     bool list_only = false;
+    bool device_present = false;
 };
 
 struct thread_info
@@ -460,6 +461,8 @@ options parse_args(int argc, char **argv)
             opts.strict_streams = true;
         else if (arg == "--list-only")
             opts.list_only = true;
+        else if (arg == "--device-present")
+            opts.device_present = true;
         else if (arg == "--help" || arg == "-h")
         {
             std::cout
@@ -475,7 +478,8 @@ options parse_args(int argc, char **argv)
                 << "  --enable-all             use config.enable_all_streams()\n"
                 << "  --single-ir              request only the first infrared stream\n"
                 << "  --strict-streams         fail instead of retrying with one infrared stream\n"
-                << "  --list-only              print selected profiles without streaming\n";
+                << "  --list-only              print selected profiles without streaming\n"
+                << "  --device-present          only verify that the selected serial is visible\n";
             std::exit(0);
         }
         else
@@ -530,6 +534,16 @@ try
         mark_cycle(cycle, "after_context");
 
         auto dev = select_device(*ctx, opts.serial);
+        if (opts.device_present)
+        {
+            std::cout << "RS_DEVICE_PRESENT {\"serial\":\""
+                      << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_SERIAL_NUMBER))
+                      << "\",\"name\":\""
+                      << json_escape(info_or_unknown(dev, RS2_CAMERA_INFO_NAME))
+                      << "\"}\n";
+            rs_trace_phase_marker("process_exit");
+            return 0;
+        }
         auto selected = choose_profiles(dev, opts.try_all_ir);
         if (cycle == 1)
             print_inventory(dev, selected);

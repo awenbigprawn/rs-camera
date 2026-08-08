@@ -14,6 +14,9 @@ from realsense_bench_common.cpu_isolation import (
     CpuIsolation,
     CpuIsolationConfig,
 )
+from realsense_bench_common.realsense_devices import (
+    discover_realsense_devices,
+)
 
 
 CPUFREQ_BASE = Path("/sys/devices/system/cpu/cpufreq")
@@ -279,21 +282,17 @@ class SystemControls:
 
     def realsense_usb_power_state(self) -> List[Dict[str, str]]:
         devices: List[Dict[str, str]] = []
-        for device_dir in sorted(self.config.usb_sysfs_base.glob("*")):
-            if not device_dir.is_dir():
-                continue
-            vendor = self._read_optional_text(device_dir / "idVendor").lower()
-            product = self._read_optional_text(device_dir / "idProduct").lower()
-            if vendor != "8086" or product != "0b07":
-                continue
+        for discovered in discover_realsense_devices(self.config.usb_sysfs_base):
+            device_dir = Path(str(discovered["sysfs_path"]))
             control = device_dir / "power" / "control"
             devices.append(
                 {
                     "usb_device": device_dir.name,
                     "sysfs_path": str(device_dir),
-                    "vendor": vendor,
-                    "product": product,
-                    "serial": self._read_optional_text(device_dir / "serial"),
+                    "vendor": str(discovered["vendor_id"]),
+                    "product": str(discovered["product_id"]),
+                    "model": str(discovered["model"]),
+                    "serial": str(discovered["serial"]),
                     "power_control_path": str(control),
                     "power_control": self._read_optional_text(control),
                 }
@@ -309,7 +308,7 @@ class SystemControls:
         devices = self.realsense_usb_power_state()
         if not devices:
             raise RuntimeError(
-                "No connected Intel RealSense D435 USB device (8086:0b07) was found"
+                "No connected Intel RealSense video camera was found"
             )
         for device in devices:
             control = Path(device["power_control_path"])
@@ -347,7 +346,7 @@ class SystemControls:
             )
         print(
             "[USB-POWER] autosuspend disabled for "
-            f"{len(verified)} connected D435 device(s)"
+            f"{len(verified)} connected RealSense camera(s)"
         )
         return verified
 
