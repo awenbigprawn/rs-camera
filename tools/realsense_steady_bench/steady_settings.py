@@ -48,7 +48,6 @@ DEFAULT_BROADCOM_VULKAN_ICD = Path(
 
 
 # These paper controls are recorded but are not Cartesian factors.
-CAMPAIGN_RSUSB_USB_DEVICES: tuple[str, ...] = ()
 FIXED_CAMPAIGN_CONSTANTS = {
     "fixed_librealsense_backend": CAMPAIGN_BACKEND,
     "fixed_usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,

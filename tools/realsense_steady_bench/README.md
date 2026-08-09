@@ -736,12 +736,29 @@ so that the result CSV identifies the actual setup.
 
 ## Retained RSUSB support
 
-RSUSB build and UVC unbind/rebind support remains in the codebase for separate
-backend validation. It is not used by the paper campaign, which fixes
-`CAMPAIGN_BACKEND = "v4l2"` and uses the kernel `uvcvideo` driver. Any RSUSB
-validation must change the explicit constants in the runner and use a separate
-build and results directory; backend results must never be mixed in one
-campaign.
+RSUSB build and UVC unbind/rebind support remains available for separate
+backend validation. It is not used by the paper campaign, which defaults to
+the V4L2 backend and the kernel `uvcvideo` driver. Keep a distinct build and
+results directory so backend-specific binaries and records are never mixed:
+
+```sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --backend rsusb \
+  --rsusb-usb-device 3-1 \
+  --recovery-wait-seconds 5 \
+  --build-dir build-realsense-steady-rsusb \
+  --results-dir tools/realsense_steady_bench/results/rsusb-validation \
+  --case representative_depth_color_30fps_10min \
+  --measurement-duration-seconds 30 \
+  --policies other \
+  --serial CAMERA_SERIAL
+```
+
+Repeat `--rsusb-usb-device` once per selected serial, in the same order as the
+`--serial` arguments. RSUSB device enumeration can take more than the V4L2
+calibration default, so use a recovery window of at least 5 seconds. The
+campaign restores each `uvcvideo` binding during cleanup, including
+interruption and failure paths.
 
 ## Result Layout
 

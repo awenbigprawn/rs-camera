@@ -181,10 +181,7 @@ class SystemControls:
         self._cpu_isolation.verify(attempt_dir / "cpu_isolation_before.json")
         if self.config.rsusb_backend:
             if self.config.rsusb_prepare_each_attempt:
-                self._run_rsusb_helper("unbind")
-                self._rsusb_unbound = True
-                if self.config.rsusb_unbind_settle_seconds > 0:
-                    time.sleep(self.config.rsusb_unbind_settle_seconds)
+                self.prepare_rsusb_access()
             else:
                 self._prepare_rsusb_once()
         if self.config.disable_realsense_autosuspend:
@@ -467,6 +464,15 @@ class SystemControls:
         if self.config.rsusb_unbind_settle_seconds > 0:
             time.sleep(self.config.rsusb_unbind_settle_seconds)
         print("[RSUSB] kernel UVC interfaces unbound for the campaign")
+
+    def prepare_rsusb_access(self) -> None:
+        """Ensure libusb can claim every configured composite UVC device."""
+        if not self.config.rsusb_backend:
+            return
+        self._run_rsusb_helper("unbind")
+        self._rsusb_unbound = True
+        if self.config.rsusb_unbind_settle_seconds > 0:
+            time.sleep(self.config.rsusb_unbind_settle_seconds)
 
     def restore_v4l2_binding(self) -> None:
         if not self._rsusb_unbound:

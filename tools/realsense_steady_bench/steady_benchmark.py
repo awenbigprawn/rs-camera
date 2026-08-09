@@ -47,12 +47,9 @@ from realsense_bench_common.memory import DropCachesBeforeRun
 from steady_attempts import camera_descriptors, run_steady_attempts
 from steady_results import parse_steady_results
 from steady_settings import (
-    CAMPAIGN_BACKEND,
     CAMPAIGN_CPU_FREQUENCY_MHZ,
     CAMPAIGN_DROP_CACHES_BEFORE_RUN,
-    CAMPAIGN_RSUSB_USB_DEVICES,
     CAMPAIGN_RT_PRIORITY,
-    CAMPAIGN_USB_KERNEL_DRIVER,
     CPU_LOCK,
     CPU_RESTORE,
     NCNN_MODEL_PARAM,
@@ -81,6 +78,8 @@ class RealSenseSteadyBench(Benchmark):
         overrun_kernel_trace: bool,
         freshness_kernel_trace: bool,
         use_sudo: bool,
+        backend: str,
+        rsusb_usb_devices: tuple[str, ...],
         cpu_isolation_enabled: bool,
         housekeeping_cpus: str,
         benchmark_cpus: str,
@@ -157,15 +156,6 @@ class RealSenseSteadyBench(Benchmark):
         self._reset_before_run = reset_before_run
         self._recovery_settle_seconds = recovery_settle_seconds
         self._max_attempts_per_run = max_attempts_per_run
-        self._recovery = MultiCameraFullReset(
-            CameraRecoveryConfig(
-                repo_root=REPO_ROOT,
-                reset_probe=self._reset_probe,
-                use_sudo=use_sudo,
-                reset_timeout_ms=recovery_reset_timeout_ms,
-                enumeration_timeout_seconds=recovery_wait_seconds,
-            )
-        )
         self._system_controls = SystemControls(
             SystemControlConfig(
                 repo_root=REPO_ROOT,
@@ -174,13 +164,28 @@ class RealSenseSteadyBench(Benchmark):
                 cpu_frequency_mhz=CAMPAIGN_CPU_FREQUENCY_MHZ,
                 cpu_lock_script=CPU_LOCK,
                 cpu_restore_script=CPU_RESTORE,
-                rsusb_backend=CAMPAIGN_BACKEND == "rsusb",
-                rsusb_usb_devices=CAMPAIGN_RSUSB_USB_DEVICES,
+                rsusb_backend=backend == "rsusb",
+                rsusb_usb_devices=rsusb_usb_devices,
                 rsusb_helper=RSUSB_HELPER,
-                disable_realsense_autosuspend=(CAMPAIGN_BACKEND == "v4l2"),
+                rsusb_prepare_each_attempt=backend == "rsusb",
+                disable_realsense_autosuspend=True,
                 cpu_isolation_enabled=cpu_isolation_enabled,
                 housekeeping_cpus=housekeeping_cpus,
                 benchmark_cpus=benchmark_cpus,
+            )
+        )
+        self._recovery = MultiCameraFullReset(
+            CameraRecoveryConfig(
+                repo_root=REPO_ROOT,
+                reset_probe=self._reset_probe,
+                use_sudo=use_sudo,
+                reset_timeout_ms=recovery_reset_timeout_ms,
+                enumeration_timeout_seconds=recovery_wait_seconds,
+                prepare_enumeration_probe=(
+                    self._system_controls.prepare_rsusb_access
+                    if backend == "rsusb"
+                    else None
+                ),
             )
         )
         vulkan_icd = gpu_noise_vulkan_icd.resolve() if gpu_noise_vulkan_icd else None
@@ -701,7 +706,11 @@ class RealSenseSteadyBench(Benchmark):
                 0 if policy in {"other", "deadline"} else self._priority
             ),
             "backend": self._system_controls.backend_name,
-            "usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
+            "usb_kernel_driver": (
+                "none"
+                if self._system_controls.backend_name == "RSUSB"
+                else "uvcvideo"
+            ),
             "realsense_usb_autosuspend_disabled": (
                 self._system_controls.config.disable_realsense_autosuspend
             ),
@@ -739,6 +748,7 @@ class RealSenseSteadyBench(Benchmark):
         )
 
         if reset_before_run:
+            self._system_controls.prepare_rsusb_access()
             self._recovery.reset_before_run(
                 camera_descriptors(case, {}),
                 record_dir,

@@ -24,14 +24,36 @@ def camera_descriptors(
     case: Mapping[str, Any],
     summary: Mapping[str, Any],
 ) -> List[Dict[str, Any]]:
-    cameras = summary.get("cameras", [])
-    if isinstance(cameras, list) and cameras:
-        return [dict(camera) for camera in cameras if isinstance(camera, dict)]
     probe = case.get("probe", {})
     serials = probe.get("serials", probe.get("serial", []))
     if isinstance(serials, str):
         serials = [serials] if serials else []
-    return [{"serial": str(serial)} for serial in serials]
+    usb_devices = probe.get("rsusb_usb_devices", [])
+    rsusb_ports = {
+        str(serial): f"/sys/bus/usb/devices/{usb_device}"
+        for serial, usb_device in zip(serials, usb_devices)
+    }
+    cameras = summary.get("cameras", [])
+    if isinstance(cameras, list) and cameras:
+        descriptors = [
+            dict(camera) for camera in cameras if isinstance(camera, dict)
+        ]
+        for descriptor in descriptors:
+            port = rsusb_ports.get(str(descriptor.get("serial", "")))
+            if port:
+                descriptor["physical_port"] = port
+        return descriptors
+    return [
+        {
+            "serial": str(serial),
+            **(
+                {"physical_port": rsusb_ports[str(serial)]}
+                if str(serial) in rsusb_ports
+                else {}
+            ),
+        }
+        for serial in serials
+    ]
 
 
 def _classify_attempt(summary: Mapping[str, Any]) -> AttemptDecision:

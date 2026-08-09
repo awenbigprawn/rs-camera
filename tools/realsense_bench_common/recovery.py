@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Callable, Dict, Iterable, Mapping
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class CameraRecoveryConfig:
     use_sudo: bool
     reset_timeout_ms: int
     enumeration_timeout_seconds: float
+    prepare_enumeration_probe: Callable[[], None] | None = None
 
 
 class MultiCameraFullReset:
@@ -70,12 +71,15 @@ class MultiCameraFullReset:
         return ""
 
     def _probe_can_find_serial(self, serial: str, timeout_seconds: float) -> tuple[bool, str]:
-        command = [
-            str(self.config.reset_probe),
-            "--device-present",
-            "--serial",
-            serial,
-        ]
+        command = self._privileged(
+            [
+                str(self.config.reset_probe),
+                "--device-present",
+                "--serial",
+                serial,
+            ],
+            preserve_library_path=True,
+        )
         try:
             completed = subprocess.run(
                 command,
@@ -171,6 +175,9 @@ class MultiCameraFullReset:
                 result["error"] = "usbreset failed"
                 return result
 
+            if self.config.prepare_enumeration_probe is not None:
+                self.config.prepare_enumeration_probe()
+
             deadline = time.monotonic() + self.config.enumeration_timeout_seconds
             last_output = ""
             while True:
@@ -179,7 +186,7 @@ class MultiCameraFullReset:
                     break
                 visible, last_output = self._probe_can_find_serial(
                     serial,
-                    timeout_seconds=max(0.05, min(2.0, remaining)),
+                    timeout_seconds=max(0.05, min(5.0, remaining)),
                 )
                 if visible:
                     result["success"] = True

@@ -18,6 +18,7 @@ sys.path.insert(0, str(_BOOTSTRAP_TOOLS_DIR))
 
 from steady_settings import (
     BENCHKIT_PATH,
+    CAMPAIGN_BACKEND,
     CAMPAIGN_BENCHMARK_CPUS,
     CAMPAIGN_CPU_ISOLATION_ENABLED,
     CAMPAIGN_HOUSEKEEPING_CPUS,
@@ -187,6 +188,26 @@ def main() -> None:
         ),
     )
     parser.add_argument("--no-sudo", action="store_true")
+    parser.add_argument(
+        "--backend",
+        choices=("v4l2", "rsusb"),
+        default=CAMPAIGN_BACKEND,
+        help=(
+            "librealsense USB backend; paper campaigns default to v4l2, "
+            "while rsusb is reserved for separate backend validation"
+        ),
+    )
+    parser.add_argument(
+        "--rsusb-usb-device",
+        dest="rsusb_usb_devices",
+        action="append",
+        default=[],
+        metavar="USB_DEVICE",
+        help=(
+            "USB composite sysfs name to unbind from uvcvideo for RSUSB, "
+            "for example 3-1; repeat for every connected test camera"
+        ),
+    )
     parser.add_argument(
         "--cpu-isolation",
         action=argparse.BooleanOptionalAction,
@@ -367,6 +388,14 @@ def main() -> None:
     args = parser.parse_args()
     if args.build_jobs < 1:
         raise SystemExit("--build-jobs must be positive")
+    if args.backend == "rsusb" and not args.rsusb_usb_devices:
+        raise SystemExit(
+            "--backend rsusb requires at least one --rsusb-usb-device"
+        )
+    if args.backend == "v4l2" and args.rsusb_usb_devices:
+        raise SystemExit(
+            "--rsusb-usb-device is only valid with --backend rsusb"
+        )
     if args.recovery_reset_timeout_ms < 1:
         raise SystemExit("--recovery-reset-timeout-ms must be positive")
     if args.recovery_wait_seconds <= 0:
@@ -502,6 +531,22 @@ def main() -> None:
             case.setdefault("probe", {})["serials"] = args.serials
             case["probe"]["camera_count"] = len(args.serials)
             case.setdefault("physical", {})["camera_count"] = len(args.serials)
+    if args.backend == "rsusb":
+        for case in cases:
+            probe = case.setdefault("probe", {})
+            camera_count = int(
+                probe.get(
+                    "camera_count",
+                    case.get("physical", {}).get("camera_count", 1),
+                )
+            )
+            if len(args.rsusb_usb_devices) != camera_count:
+                raise SystemExit(
+                    "RSUSB requires one --rsusb-usb-device per selected camera; "
+                    f"case {case['case_id']!r} selects {camera_count} camera(s) "
+                    f"but provides {len(args.rsusb_usb_devices)} USB device(s)"
+                )
+            probe["rsusb_usb_devices"] = list(args.rsusb_usb_devices)
     if not cases:
         raise SystemExit("No cases selected")
     if args.deadline_profile is not None:
@@ -569,6 +614,8 @@ def main() -> None:
         overrun_kernel_trace=args.overrun_kernel_trace,
         freshness_kernel_trace=args.freshness_kernel_trace,
         use_sudo=not args.no_sudo,
+        backend=args.backend,
+        rsusb_usb_devices=tuple(args.rsusb_usb_devices),
         cpu_isolation_enabled=args.cpu_isolation,
         housekeeping_cpus=args.housekeeping_cpus,
         benchmark_cpus=args.benchmark_cpus,
@@ -609,6 +656,10 @@ def main() -> None:
     )
     campaign_constants = {
         **FIXED_CAMPAIGN_CONSTANTS,
+        "fixed_librealsense_backend": args.backend,
+        "fixed_usb_kernel_driver": (
+            "uvcvideo" if args.backend == "v4l2" else "none"
+        ),
         "fixed_cpu_isolation": args.cpu_isolation,
         "fixed_housekeeping_cpus": (
             args.housekeeping_cpus if args.cpu_isolation else ""

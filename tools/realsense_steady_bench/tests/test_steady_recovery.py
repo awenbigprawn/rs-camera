@@ -21,6 +21,7 @@ from realsense_bench_common.recovery import (  # noqa: E402
     MultiCameraFullReset,
 )
 from steady_benchmark import RealSenseSteadyBench  # noqa: E402
+from steady_attempts import camera_descriptors  # noqa: E402
 
 
 class _SystemControls:
@@ -39,6 +40,9 @@ class _SystemControls:
 
     def prepare_attempt(self, attempt, attempt_dir):
         del attempt, attempt_dir
+
+    def prepare_rsusb_access(self):
+        pass
 
     def verify_cpu_isolation(self, output):
         del output
@@ -167,6 +171,34 @@ def _summary(*, success, measurement_start, error=""):
 
 
 class SteadyRunRetryTest(unittest.TestCase):
+    def test_rsusb_camera_descriptors_use_explicit_sysfs_ports(self):
+        case = {
+            "probe": {
+                "serials": ["camera-a", "camera-b"],
+                "rsusb_usb_devices": ["3-1", "5-1"],
+            }
+        }
+        summary = {
+            "cameras": [
+                {"serial": "camera-a", "physical_port": "3-1-42"},
+                {"serial": "camera-b", "physical_port": "5-1-43"},
+            ]
+        }
+
+        self.assertEqual(
+            camera_descriptors(case, summary),
+            [
+                {
+                    "serial": "camera-a",
+                    "physical_port": "/sys/bus/usb/devices/3-1",
+                },
+                {
+                    "serial": "camera-b",
+                    "physical_port": "/sys/bus/usb/devices/5-1",
+                },
+            ],
+        )
+
     def test_pre_run_reset_covers_every_camera_before_attempt_one(self):
         bench = _FakeSteadyBench(
             [_summary(success=True, measurement_start=123456)]
