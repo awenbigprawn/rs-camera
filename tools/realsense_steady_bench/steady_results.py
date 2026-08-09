@@ -241,6 +241,12 @@ def parse_steady_results(
         ),
         "deadline_profile_applied": data.get("deadline") is not None,
         "rate_monotonic_profile_applied": data.get("rate_monotonic") is not None,
+        "hardware_sync_enabled": False,
+        "hardware_sync_master_serial": "",
+        "hardware_sync_slave_serials": "[]",
+        "hardware_sync_all_applied": False,
+        "hardware_sync_all_restored": False,
+        "hardware_sync_assignments": "[]",
         "cpu_noise_mode": run_variables["cpu_noise"],
         "cpu_noise_enabled": run_variables["cpu_noise"] != "none",
         "memory_noise_mode": run_variables["memory_noise"],
@@ -328,6 +334,7 @@ def parse_steady_results(
         flatten("deadline", data["deadline"], result)
     if data.get("rate_monotonic") is not None:
         flatten("rate_monotonic", data["rate_monotonic"], result)
+    flatten("hardware_sync", data.get("hardware_sync", {}), result)
     _add_camera_results(result, data, camera_result_slots)
     _add_trace_results(result, selected_dir)
     _add_kernel_results(result, selected_dir)

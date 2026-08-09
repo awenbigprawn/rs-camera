@@ -335,6 +335,14 @@ class RealSenseSteadyBench(Benchmark):
             serials = [serials] if serials else []
         for serial in serials:
             command += ["--serial", str(serial)]
+        hardware_sync_master = probe.get("hardware_sync_master")
+        if hardware_sync_master:
+            command += ["--hardware-sync-master", str(hardware_sync_master)]
+        hardware_sync_slaves = probe.get("hardware_sync_slaves", [])
+        if isinstance(hardware_sync_slaves, str):
+            hardware_sync_slaves = [hardware_sync_slaves]
+        for serial in hardware_sync_slaves:
+            command += ["--hardware-sync-slave", str(serial)]
         camera_count = probe.get(
             "camera_count",
             case.get("physical", {}).get("camera_count", 1),

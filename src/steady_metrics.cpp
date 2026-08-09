@@ -174,7 +174,8 @@ std::string record_warmup_frame(camera_metrics &metrics, const rs2::frame &frame
 std::string warmup_health_error(const camera_metrics &metrics,
                                 const std::string &serial,
                                 size_t expected_streams,
-                                bool require_complete_frameset)
+                                bool require_complete_frameset,
+                                bool allow_unsynchronized_color_reuse)
 {
     if (metrics.warmup_streams.size() != expected_streams)
         return serial + ": warm-up freshness expected " +
@@ -183,11 +184,22 @@ std::string warmup_health_error(const camera_metrics &metrics,
 
     for (const auto &[key, stream] : metrics.warmup_streams)
     {
+        // D400 external synchronization controls the depth sensor, not the
+        // independent RGB sensor.  The frameset synchronizer may therefore
+        // reuse a recent color frame while pairing it with synchronized depth.
+        // Keep that narrowly bounded and continue treating gaps or reordering
+        // on every stream as a hard warm-up failure.
+        const bool unsynchronized_color =
+            allow_unsynchronized_color_reuse && key.rfind("Color#", 0) == 0;
+        const uint64_t allowed_color_duplicates = unsynchronized_color
+            ? std::max<uint64_t>(1, metrics.warmup_health_deliveries / 20)
+            : 0;
         const bool missing_from_framesets =
             require_complete_frameset &&
             stream.observed_frames != metrics.warmup_health_deliveries;
         if (stream.observed_frames < 2 || missing_from_framesets ||
-            stream.duplicate_frames || stream.sequence_gaps ||
+            stream.duplicate_frames > allowed_color_duplicates ||
+            stream.sequence_gaps ||
             stream.out_of_order_frames)
         {
             std::ostringstream message;

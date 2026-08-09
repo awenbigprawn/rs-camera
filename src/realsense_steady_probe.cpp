@@ -1,5 +1,6 @@
 #include "rs_camera/benchmark_utils.h"
 #include "rs_camera/deadline_scheduler.h"
+#include "rs_camera/hardware_sync.h"
 #include "rs_camera/realsense_utils.h"
 #include "rs_camera/steady_metrics.h"
 #include "rs_camera/trace_marker.h"
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <pthread.h>
 #include <sched.h>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -62,6 +64,8 @@ struct options
     std::string rate_monotonic_policy;
     std::string warmup_ready_file;
     std::string measurement_start_gate;
+    std::string hardware_sync_master;
+    std::vector<std::string> hardware_sync_slaves;
     bool deadline_allow_partial_profile = false;
     int scheduler_apply_after_frames = 0;
     int rate_monotonic_highest_priority = 80;
@@ -182,6 +186,10 @@ options parse_args(int argc, char **argv)
             opts.measurement_start_gate = value(arg);
         else if (arg == "--measurement-gate-timeout-ms")
             opts.measurement_gate_timeout_ms = std::stoi(value(arg));
+        else if (arg == "--hardware-sync-master")
+            opts.hardware_sync_master = value(arg);
+        else if (arg == "--hardware-sync-slave")
+            opts.hardware_sync_slaves.push_back(value(arg));
         else if (arg == "--help" || arg == "-h")
         {
             std::cout
@@ -209,7 +217,9 @@ options parse_args(int argc, char **argv)
                 << "  --deadline-apply-after-frames N  Compatibility alias for the previous option\n"
                 << "  --warmup-ready-file PATH      Signal that every camera is warm\n"
                 << "  --measurement-start-gate PATH Wait for this file before measuring\n"
-                << "  --measurement-gate-timeout-ms N  Maximum gate wait\n";
+                << "  --measurement-gate-timeout-ms N  Maximum gate wait\n"
+                << "  --hardware-sync-master SERIAL   Set one selected depth sensor to mode 1\n"
+                << "  --hardware-sync-slave SERIAL    Repeat for selected depth sensors in mode 2\n";
             std::exit(0);
         }
         else
@@ -239,6 +249,30 @@ options parse_args(int argc, char **argv)
     if (has_measurement_gate && opts.measurement_gate_timeout_ms <= 0)
         throw std::runtime_error(
             "measurement-gate-timeout-ms must be positive when a gate is used");
+    const bool hardware_sync_requested =
+        !opts.hardware_sync_master.empty() || !opts.hardware_sync_slaves.empty();
+    if (hardware_sync_requested)
+    {
+        if (opts.hardware_sync_master.empty() || opts.hardware_sync_slaves.empty())
+            throw std::runtime_error(
+                "Hardware sync requires one master and at least one slave");
+        if (opts.serials.empty())
+            throw std::runtime_error(
+                "Hardware sync requires explicit --serial arguments");
+        std::set<std::string> roles(opts.hardware_sync_slaves.begin(),
+                                    opts.hardware_sync_slaves.end());
+        if (roles.size() != opts.hardware_sync_slaves.size())
+            throw std::runtime_error("Hardware-sync slave serials must be unique");
+        if (!roles.insert(opts.hardware_sync_master).second)
+            throw std::runtime_error(
+                "The hardware-sync master cannot also be a slave");
+        const std::set<std::string> selected(opts.serials.begin(), opts.serials.end());
+        if (selected.size() != opts.serials.size())
+            throw std::runtime_error("Selected camera serials must be unique");
+        if (roles != selected)
+            throw std::runtime_error(
+                "Every selected camera must have exactly one hardware-sync role");
+    }
     const bool deadline_requested = !opts.deadline_profile.empty();
     const bool rate_monotonic_profile_requested =
         !opts.rate_monotonic_profile.empty();
@@ -465,7 +499,8 @@ void record_delivery(camera_runtime &camera,
                         metrics,
                         camera.serial,
                         expected_stream_count(opts.stream_mode),
-                        opts.delivery == "wait");
+                        opts.delivery == "wait",
+                        !opts.hardware_sync_master.empty());
                 }
                 if (health_error.empty())
                 {
@@ -694,6 +729,74 @@ void write_active_streams(std::ostream &out, const rs2::pipeline_profile &profil
     out << "]";
 }
 
+void write_hardware_sync(std::ostream &out,
+                         const rs_camera::hardware_sync_session &session)
+{
+    out << "{\"enabled\":" << (session.enabled() ? "true" : "false")
+        << ",\"master_serial\":" << quoted(session.master_serial())
+        << ",\"slave_serials\":[";
+    bool first = true;
+    for (const auto &serial : session.slave_serials())
+    {
+        if (!first)
+            out << ",";
+        first = false;
+        out << quoted(serial);
+    }
+    out << "],\"all_applied\":"
+        << (session.all_applied() ? "true" : "false")
+        << ",\"all_restored\":"
+        << (session.all_restored() ? "true" : "false")
+        << ",\"assignments\":[";
+    first = true;
+    for (const auto &assignment : session.assignments())
+    {
+        if (!first)
+            out << ",";
+        first = false;
+        out << "{\"serial\":" << quoted(assignment.serial)
+            << ",\"role\":" << quoted(assignment.role)
+            << ",\"requested_mode\":" << assignment.requested_mode
+            << ",\"previous_mode\":" << assignment.previous_mode
+            << ",\"effective_mode\":" << assignment.effective_mode
+            << ",\"restored_mode\":" << assignment.restored_mode
+            << ",\"applied\":" << (assignment.applied ? "true" : "false")
+            << ",\"restored\":" << (assignment.restored ? "true" : "false")
+            << ",\"restore_error\":" << quoted(assignment.restore_error)
+            << "}";
+    }
+    out << "]}";
+}
+
+size_t camera_index(const std::vector<std::unique_ptr<camera_runtime>> &cameras,
+                    const std::string &serial)
+{
+    for (size_t index = 0; index < cameras.size(); ++index)
+    {
+        if (cameras[index]->serial == serial)
+            return index;
+    }
+    throw std::runtime_error("Selected camera is unavailable: " + serial);
+}
+
+std::vector<size_t> pipeline_start_order(
+    const options &opts,
+    const std::vector<std::unique_ptr<camera_runtime>> &cameras)
+{
+    std::vector<size_t> order;
+    order.reserve(cameras.size());
+    if (opts.hardware_sync_master.empty())
+    {
+        for (size_t index = 0; index < cameras.size(); ++index)
+            order.push_back(index);
+        return order;
+    }
+    for (const auto &serial : opts.hardware_sync_slaves)
+        order.push_back(camera_index(cameras, serial));
+    order.push_back(camera_index(cameras, opts.hardware_sync_master));
+    return order;
+}
+
 void write_summary(const std::string &path,
                    const options &opts,
                    const std::vector<std::unique_ptr<camera_runtime>> &cameras,
@@ -703,6 +806,7 @@ void write_summary(const std::string &path,
                    uint64_t measurement_end_ns,
                    bool success,
                    const std::string &error,
+                   const rs_camera::hardware_sync_session &hardware_sync,
                    const rs_camera::deadline_application *deadline_result,
                    const rs_camera::rate_monotonic_application *rate_monotonic_result)
 {
@@ -755,7 +859,7 @@ void write_summary(const std::string &path,
     sched_param parameter{};
     sched_getparam(0, &parameter);
     out << "{\n"
-        << "  \"schema_version\": 8,\n"
+        << "  \"schema_version\": 9,\n"
         << "  \"success\": " << (success ? "true" : "false") << ",\n"
         << "  \"error\": " << quoted(error) << ",\n"
         << "  \"scheduler\": {\"policy\":" << quoted(scheduler_policy())
@@ -780,7 +884,9 @@ void write_summary(const std::string &path,
                 ? rs_camera::rate_monotonic_application_json(
                       *rate_monotonic_result)
                 : "null")
-        << ",\n"
+        << ",\n  \"hardware_sync\": ";
+    write_hardware_sync(out, hardware_sync);
+    out << ",\n"
         << "  \"run\": {\"camera_count\":" << cameras.size()
         << ",\"stream_mode\":" << quoted(opts.stream_mode)
         << ",\"delivery\":" << quoted(opts.delivery)
@@ -995,8 +1101,44 @@ try
     }
     rs_trace_phase_marker("after_event_storage_allocation");
 
+    rs_trace_phase_marker("hardware_sync_configure_begin");
+    rs_camera::hardware_sync_session hardware_sync(
+        context, opts.hardware_sync_master, opts.hardware_sync_slaves);
+    if (hardware_sync.enabled())
+    {
+        std::cout << "RS_HARDWARE_SYNC {\"master\":"
+                  << quoted(hardware_sync.master_serial())
+                  << ",\"slaves\":[";
+        bool first = true;
+        for (const auto &serial : hardware_sync.slave_serials())
+        {
+            if (!first)
+                std::cout << ",";
+            first = false;
+            std::cout << quoted(serial);
+        }
+        std::cout << "],\"assignments\":[";
+        first = true;
+        for (const auto &assignment : hardware_sync.assignments())
+        {
+            if (!first)
+                std::cout << ",";
+            first = false;
+            std::cout << "{\"serial\":" << quoted(assignment.serial)
+                      << ",\"role\":" << quoted(assignment.role)
+                      << ",\"previous_mode\":" << assignment.previous_mode
+                      << ",\"effective_mode\":" << assignment.effective_mode
+                      << "}";
+        }
+        std::cout << "],\"applied\":"
+                  << (hardware_sync.all_applied() ? "true" : "false")
+                  << "}\n";
+    }
+    rs_trace_phase_marker("hardware_sync_configure_end");
+    const auto start_order = pipeline_start_order(opts, cameras);
+
     rs_trace_phase_marker("before_pipeline_start");
-    for (size_t i = 0; i < cameras.size(); ++i)
+    for (const size_t i : start_order)
     {
         auto &camera = *cameras[i];
         camera.metrics.start_begin_ns = rs_trace_boottime_ns();
@@ -1195,8 +1337,12 @@ try
 
     control.stop.store(true);
     rs_trace_phase_marker("before_pipeline_stop");
-    for (auto &camera : cameras)
+    std::vector<size_t> stop_order = start_order;
+    if (hardware_sync.enabled())
+        std::reverse(stop_order.begin(), stop_order.end());
+    for (const size_t index : stop_order)
     {
+        auto &camera = cameras[index];
         camera->metrics.stop_begin_ns = rs_trace_boottime_ns();
         try
         {
@@ -1216,6 +1362,13 @@ try
     }
     rs_trace_phase_marker("after_pipeline_stop");
 
+    rs_trace_phase_marker("hardware_sync_restore_begin");
+    const std::string hardware_sync_restore_error = hardware_sync.restore();
+    if (!hardware_sync_restore_error.empty() && !control.failed.load())
+        set_failure(control, "Hardware-sync restore failed: " +
+                                 hardware_sync_restore_error);
+    rs_trace_phase_marker("hardware_sync_restore_end");
+
     if (!opts.events_output.empty())
         write_events(opts.events_output, cameras, measurement_start_ns);
     if (!opts.summary_output.empty())
@@ -1228,6 +1381,7 @@ try
                       measurement_end_ns,
                       !control.failed.load(),
                       control.error,
+                      hardware_sync,
                       deadline_result.get(),
                       rate_monotonic_result.get());
 

@@ -119,7 +119,8 @@ std::string record_warmup_frame(camera_metrics &metrics, const rs2::frame &frame
 std::string warmup_health_error(const camera_metrics &metrics,
                                 const std::string &serial,
                                 size_t expected_streams,
-                                bool require_complete_frameset);
+                                bool require_complete_frameset,
+                                bool allow_unsynchronized_color_reuse = false);
 std::string record_measured_frame(camera_metrics &metrics,
                                   const rs2::frame &frame,
                                   uint64_t host_ns,

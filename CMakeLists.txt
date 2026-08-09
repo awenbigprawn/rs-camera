@@ -72,6 +72,7 @@ add_library(
     rs_camera_probe_support
     STATIC
         src/benchmark_utils.cpp
+        src/hardware_sync.cpp
         src/realsense_utils.cpp
         src/steady_metrics.cpp
 )
