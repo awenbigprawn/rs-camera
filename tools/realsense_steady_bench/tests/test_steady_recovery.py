@@ -228,6 +228,55 @@ class SteadyRunRetryTest(unittest.TestCase):
             self.assertEqual(bench._recovery.calls, [])
             self.assertTrue((record_dir / "pre_run_reset.json").is_file())
 
+    def test_pre_run_reset_failure_recovers_and_retries_same_run(self):
+        bench = _FakeSteadyBench(
+            [
+                _summary(success=True, measurement_start=111111),
+                _summary(success=True, measurement_start=222222),
+            ]
+        )
+        bench._reset_before_run = True
+        bench._recovery.reset_before_run = mock.Mock(
+            side_effect=RuntimeError("camera did not reappear")
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            record_dir = Path(temporary)
+            output = bench.single_run(
+                case_id="two-camera",
+                policy="other",
+                cpu_noise="none",
+                memory_noise="none",
+                gpu_noise="none",
+                usb_storage_noise="none",
+                record_data_dir=record_dir,
+            )
+
+            summary = json.loads(
+                (record_dir / "steady_summary.json").read_text(encoding="utf-8")
+            )
+            first_attempt = json.loads(
+                (record_dir / "attempt-1" / "steady_summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(output, "attempt 2\n")
+            self.assertEqual(len(bench._recovery.calls), 1)
+            self.assertEqual(
+                [camera["serial"] for camera in bench._recovery.calls[0]],
+                ["camera-a", "camera-b"],
+            )
+            self.assertTrue(
+                first_attempt["error"].startswith("Pre-run reset failed:")
+            )
+            self.assertEqual(summary["attempt_count"], 2)
+            self.assertEqual(summary["failed_attempt_count"], 1)
+            self.assertFalse(summary["initial_attempt_success"])
+            self.assertTrue(summary["eventual_success"])
+            self.assertEqual(summary["attempts"][0]["failure_phase"], "startup")
+            self.assertTrue(summary["attempts"][1]["success"])
+
     def test_startup_failure_resets_both_cameras_and_retries_same_run(self):
         bench = _FakeSteadyBench(
             [

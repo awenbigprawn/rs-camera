@@ -44,9 +44,14 @@ from realsense_bench_common.system_controls import (
     SystemControls,
 )
 from realsense_bench_common.memory import DropCachesBeforeRun
-from steady_attempts import camera_descriptors, run_steady_attempts
+from steady_attempts import (
+    camera_descriptors,
+    record_pre_run_reset_failure,
+    run_steady_attempts,
+)
 from steady_results import parse_steady_results
 from steady_settings import (
+    CAMPAIGN_BUILD_TYPE,
     CAMPAIGN_CPU_FREQUENCY_MHZ,
     CAMPAIGN_DROP_CACHES_BEFORE_RUN,
     CAMPAIGN_RT_PRIORITY,
@@ -294,7 +299,7 @@ class RealSenseSteadyBench(Benchmark):
                 str(REPO_ROOT),
                 "-B",
                 str(self._build_dir),
-                "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                f"-DCMAKE_BUILD_TYPE={CAMPAIGN_BUILD_TYPE}",
                 f"-DFORCE_RSUSB_BACKEND={'ON' if self._system_controls.config.rsusb_backend else 'OFF'}",
                 f"-DRS_CAMERA_BUILD_GPU_NOISE={'ON' if self._noise_suite.gpu_enabled else 'OFF'}",
                 f"-DRS_CAMERA_V4L2_DIAGNOSTICS={'ON' if self._v4l2_diagnostics_build else 'OFF'}",
@@ -747,16 +752,24 @@ class RealSenseSteadyBench(Benchmark):
             encoding="utf-8",
         )
 
-        if reset_before_run:
-            self._system_controls.prepare_rsusb_access()
-            self._recovery.reset_before_run(
-                camera_descriptors(case, {}),
-                record_dir,
-            )
-
         def run_attempt(
             attempt: int, attempt_dir: Path
         ) -> tuple[str, Dict[str, Any]]:
+            if reset_before_run and attempt == 1:
+                self._system_controls.prepare_rsusb_access()
+                try:
+                    self._recovery.reset_before_run(
+                        camera_descriptors(case, {}),
+                        record_dir,
+                    )
+                except Exception as error:
+                    return record_pre_run_reset_failure(
+                        case=case,
+                        attempt=attempt,
+                        attempt_dir=attempt_dir,
+                        base_manifest=base_manifest,
+                        error=error,
+                    )
             return self._run_attempt(
                 case_id=case_id,
                 case=case,

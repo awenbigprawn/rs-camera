@@ -38,6 +38,7 @@ POLICY_NAMES = {
 }
 MODELED_POLICIES = frozenset({"deadline", "rr-rm", "fifo-rm"})
 DEFAULT_BUILD_DIR = REPO_ROOT / "build-realsense-steady"
+CAMPAIGN_BUILD_TYPE = "RelWithDebInfo"
 DEFAULT_RESULTS_DIR = TOOL_DIR / "results"
 NCNN_MODEL_PARAM = (
     REPO_ROOT / "deps" / "ncnn" / "benchmark" / "models" / "mobilenet_v2.param"
@@ -49,6 +50,7 @@ DEFAULT_BROADCOM_VULKAN_ICD = Path(
 
 # These paper controls are recorded but are not Cartesian factors.
 FIXED_CAMPAIGN_CONSTANTS = {
+    "fixed_cmake_build_type": CAMPAIGN_BUILD_TYPE,
     "fixed_librealsense_backend": CAMPAIGN_BACKEND,
     "fixed_usb_kernel_driver": CAMPAIGN_USB_KERNEL_DRIVER,
     "fixed_cpu_frequency_mhz": CAMPAIGN_CPU_FREQUENCY_MHZ,

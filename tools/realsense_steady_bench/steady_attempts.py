@@ -15,6 +15,52 @@ from realsense_bench_common.attempts import (
 AttemptFunction = Callable[[int, Path], tuple[str, Dict[str, Any]]]
 
 
+def record_pre_run_reset_failure(
+    *,
+    case: Mapping[str, Any],
+    attempt: int,
+    attempt_dir: Path,
+    base_manifest: Mapping[str, Any],
+    error: Exception,
+) -> tuple[str, Dict[str, Any]]:
+    """Record a pre-run reset failure as a retryable startup attempt."""
+
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+    message = f"Pre-run reset failed: {type(error).__name__}: {error}"
+    cameras = camera_descriptors(case, {})
+    summary: Dict[str, Any] = {
+        "schema_version": 1,
+        "success": False,
+        "error": message,
+        "run": {"camera_count": len(cameras)},
+        "measurement": {
+            "start_boottime_ns": 0,
+            "end_boottime_ns": 0,
+            "duration_ms": 0.0,
+        },
+        "aggregate": {},
+        "cameras": cameras,
+    }
+    manifest = {
+        **base_manifest,
+        "attempt": attempt,
+        "record_data_dir": str(attempt_dir),
+        "pre_run_reset_failed": True,
+        "pre_run_reset_error": message,
+    }
+    (attempt_dir / "steady_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (attempt_dir / "attempt_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    output = message + "\n"
+    (attempt_dir / "probe_stdout.txt").write_text(output, encoding="utf-8")
+    return output, summary
+
+
 def measurement_started(summary: Mapping[str, Any]) -> bool:
     value = summary.get("measurement", {}).get("start_boottime_ns", 0)
     return bool(int(value or 0))
