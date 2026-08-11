@@ -1,0 +1,14 @@
+[Unit]
+Description=Run RTNS RealSense no-isolation formal matrix
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=safebot
+WorkingDirectory=/home/safebot/program/rs-camera
+ExecStart=/home/safebot/.local/bin/rs-rtns-no-isolation-matrix
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

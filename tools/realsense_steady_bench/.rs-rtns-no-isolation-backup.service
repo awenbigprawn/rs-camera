@@ -1,0 +1,13 @@
+[Unit]
+Description=Back up RTNS RealSense no-isolation matrix from Raspberry Pi
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/safebot/program/rs-camera
+ExecStart=/home/safebot/program/rs-camera/tools/realsense_steady_bench/.rtns_no_isolation_backup_20260811.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
