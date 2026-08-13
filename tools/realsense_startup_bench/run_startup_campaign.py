@@ -469,17 +469,37 @@ class RealSenseStartupBench(Benchmark):
             + delay_budget_seconds,
         )
         kernel_before, kernel_error = self._system_controls.kernel_log()
+        process_timeout = False
         try:
-            output = self.run_bench_command(
-                run_command=command,
-                wrapped_run_command=wrapped_command,
-                current_dir=REPO_ROOT,
-                environment=environment,
-                wrapped_environment=wrapped_environment,
-                print_output=False,
-                timeout=timeout,
-                ignore_ret_codes=(1, 2, 3),
-            )
+            try:
+                output = self.run_bench_command(
+                    run_command=command,
+                    wrapped_run_command=wrapped_command,
+                    current_dir=REPO_ROOT,
+                    environment=environment,
+                    wrapped_environment=wrapped_environment,
+                    print_output=False,
+                    timeout=timeout,
+                    ignore_ret_codes=(1, 2, 3),
+                )
+            except subprocess.TimeoutExpired as error:
+                process_timeout = True
+                captured = error.output
+                if isinstance(captured, bytes):
+                    output = captured.decode(errors="replace")
+                else:
+                    output = captured or ""
+                if output and not output.endswith("\n"):
+                    output += "\n"
+                timeout_message = f"probe exceeded outer timeout of {timeout}s"
+                output += (
+                    "RS_STARTUP_ERROR "
+                    + json.dumps({
+                        "kind": "outer-timeout",
+                        "message": timeout_message,
+                    })
+                    + "\n"
+                )
         finally:
             self._system_controls.capture_kernel_delta(
                 attempt_dir,
@@ -494,6 +514,8 @@ class RealSenseStartupBench(Benchmark):
             output_dir=attempt_dir,
             stdout_path=stdout_path,
         )
+        if process_timeout:
+            summary["process_error"] = True
         return output, summary
 
     def single_run(
@@ -581,8 +603,12 @@ class RealSenseStartupBench(Benchmark):
         def classify_attempt(summary: Dict[str, Any]) -> AttemptDecision:
             startup_result = summary.get("startup_result", {})
             startup_error = summary.get("startup_error", {})
-            success = bool(startup_result.get("success", False))
+            process_error = bool(summary.get("process_error", False))
+            probe_success = bool(startup_result.get("success", False))
+            success = probe_success and not process_error
             error_message = str(startup_error.get("message", ""))
+            if process_error and not error_message:
+                error_message = "benchmark process failed before clean exit"
             return AttemptDecision(
                 success=success,
                 failure_phase="none" if success else "startup",

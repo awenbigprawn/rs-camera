@@ -265,6 +265,8 @@ def selected_attempt_dirs(campaign_dir: Path, policy: str) -> List[Path]:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         if not summary.get("startup_result", {}).get("success", False):
             continue
+        if summary.get("process_error", False):
+            continue
         attempts.append(candidate_dir)
     return sorted(attempts)
 

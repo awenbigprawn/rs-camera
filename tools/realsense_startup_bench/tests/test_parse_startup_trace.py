@@ -1,6 +1,7 @@
 import csv
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -174,6 +175,109 @@ class RetryStartupRunTest(unittest.TestCase):
                 (root / "selected_attempt.txt").read_text(encoding="utf-8"),
                 "2\n",
             )
+
+    def test_outer_timeout_becomes_a_retryable_attempt_summary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            attempt_dir = Path(temporary) / "attempt-1"
+            bench = object.__new__(RealSenseStartupBench)
+            bench._cycles = 1
+            bench._frame_timeout_ms = 1500
+            bench._join_timeout_ms = 10
+            bench._process_timeout_seconds = 30
+            bench._tracer = Path("/test/libtrace_pthreads.so")
+            bench._lime = Path("/test/lime-rtw")
+            bench._use_sudo = False
+            bench._scheduled_probe = mock.Mock(return_value=["/test/probe"])
+            bench._preload_env = mock.Mock(return_value={})
+            bench._wrap_command = mock.Mock(return_value=(["/test/probe"], {}))
+            bench.run_bench_command = mock.Mock(
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["/test/probe"],
+                    timeout=30,
+                    output=b'RS_DEVICE {"serial":"test-serial"}\n',
+                )
+            )
+            bench._system_controls = mock.Mock()
+            bench._system_controls.kernel_log.return_value = ("before\n", "")
+
+            parsed = {
+                "process_error": False,
+                "startup_result": {"success": False},
+                "startup_error": {
+                    "kind": "outer-timeout",
+                    "message": "probe exceeded outer timeout of 30s",
+                },
+            }
+            with mock.patch(
+                "run_startup_campaign.traced_command",
+                return_value=["/test/probe"],
+            ), mock.patch(
+                "run_startup_campaign.parse_startup_trace",
+                return_value=parsed,
+            ) as parse:
+                output, summary = bench._run_attempt(
+                    policy="other",
+                    cycle_delay_ms=0,
+                    attempt=1,
+                    attempt_dir=attempt_dir,
+                    base_manifest={},
+                    kwargs={},
+                )
+
+            self.assertIn('"kind": "outer-timeout"', output)
+            self.assertTrue(summary["process_error"])
+            self.assertEqual(
+                (attempt_dir / "probe_stdout.txt").read_text(encoding="utf-8"),
+                output,
+            )
+            parse.assert_called_once()
+            bench._system_controls.capture_kernel_delta.assert_called_once()
+
+    def test_clean_probe_result_is_retried_when_trace_process_times_out(self):
+        class TimeoutThenSuccessBench(self._FailThenSucceedBench):
+            def _run_attempt(
+                self,
+                policy,
+                cycle_delay_ms,
+                attempt,
+                attempt_dir,
+                base_manifest,
+                kwargs,
+            ):
+                del policy, cycle_delay_ms, base_manifest, kwargs
+                attempt_dir.mkdir(parents=True, exist_ok=False)
+                return "probe completed\n", {
+                    "device": {"serial": "test-serial"},
+                    "process_error": attempt == 1,
+                    "startup_result": {
+                        "success": True,
+                        "completed_cycles": 10,
+                    },
+                    "cycles_started": 10,
+                    "startup_error": (
+                        {
+                            "kind": "outer-timeout",
+                            "message": "probe exceeded outer timeout of 30s",
+                        }
+                        if attempt == 1
+                        else {}
+                    ),
+                }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bench = TimeoutThenSuccessBench()
+
+            bench.single_run(policy="other", record_data_dir=root)
+
+            summary = json.loads(
+                (root / "summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["attempt_count"], 2)
+            self.assertEqual(summary["failed_attempt_count"], 1)
+            self.assertFalse(summary["initial_attempt_success"])
+            self.assertTrue(summary["eventual_success"])
+            self.assertEqual(bench.recovery_calls, 1)
 
 
 class RsusbCleanupTest(unittest.TestCase):

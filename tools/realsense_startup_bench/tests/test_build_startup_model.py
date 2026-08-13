@@ -1,11 +1,17 @@
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 TOOL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_DIR))
 
-from build_startup_model import detect_stable_period, percentile
+from build_startup_model import (
+    detect_stable_period,
+    percentile,
+    selected_attempt_dirs,
+)
 
 
 def running_intervals(starts, duration=0.2):
@@ -94,6 +100,25 @@ class StartupModelTest(unittest.TestCase):
         self.assertEqual(percentile([0.0, 10.0, 20.0], 0.5), 10.0)
         self.assertEqual(percentile([0.0, 10.0, 20.0], 0.25), 5.0)
         self.assertIsNone(percentile([], 0.5))
+
+    def test_process_error_is_excluded_even_when_probe_reported_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Path(temporary)
+            attempt = campaign / "policy-other" / "run-1" / "attempt-1"
+            attempt.mkdir(parents=True)
+            (attempt / "thread_timing.csv").write_text(
+                "header\n", encoding="utf-8"
+            )
+            (attempt / "summary.json").write_text(
+                json.dumps({
+                    "process_error": True,
+                    "startup_result": {"success": True},
+                })
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(selected_attempt_dirs(campaign, "other"), [])
 
 
 if __name__ == "__main__":
