@@ -144,6 +144,39 @@ Example two-camera diagnosis:
   --results-dir tools/realsense_steady_bench/results/freshness_path
 ```
 
+### Full receive-path diagnostics
+
+The full-path helper correlates a short, one-camera run across the threaded
+xHCI IRQ, USB HCD giveback, UVC completion and deferred copy, V4L2 buffer
+completion, librealsense synchronization, aggregator enqueue, and
+`wait_for_frames()` return.  It is intended for causal diagnosis rather than
+the confirmatory performance matrix.  Its kprobe structure offsets apply only
+to the archived Raspberry Pi 5 Linux 6.12.96 BTF kernels.
+
+`configs/full_path_stress_30s.json` records the model-specific 60 FPS stress
+profiles.  The D435 uses 960x540 color and the D455 uses 848x480 color.  Both
+use 848x480 depth and two infrared streams.  The run keeps 30 warm-up
+framesets but validates freshness over the final ten, allowing startup
+transients to settle before policy installation and measurement.
+
+Run one camera after generating a matching rate-monotonic profile:
+
+```sh
+sudo tools/realsense_steady_bench/run_full_path_stress_trace.sh \
+  d435 SERIAL PROFILE.csv OUTPUT_DIR XHCI_IRQ
+
+python3 tools/realsense_steady_bench/analyze_full_receive_path.py OUTPUT_DIR
+```
+
+The helper fixes the CPU at 1500 MHz, raises the selected threaded xHCI IRQ to
+FIFO priority 90, applies the supplied FIFO rate-monotonic profile after
+warm-up, and restores the IRQ priority and CPU-frequency state during cleanup.
+The resulting `full_receive_path_summary.json` separates frame age, kernel
+stage wall times, userspace stage times, and the final queue handoff.  UVC
+frame-assembly time includes waiting between URBs and is not CPU execution
+time.  Full tracing is intrusive and should not be used as an uninstrumented
+performance baseline.
+
 Do not enable `--overrun-kernel-trace` in the same run: both options own one
 `trace-cmd` session. If the low-volume trace identifies unexplained loss before
 UVC frame completion, use a separate short xHCI flight-recorder run. Recording

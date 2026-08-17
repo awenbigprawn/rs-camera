@@ -44,6 +44,10 @@ STAGES = {
     23: "syncer_match_end",
     24: "syncer_emit_begin",
     25: "syncer_emit_end",
+    26: "aggregator_enqueue_begin",
+    27: "aggregator_enqueue_end",
+    28: "pipeline_wait_begin",
+    29: "pipeline_wait_end",
 }
 PAIRS = {
     stage: stage.removesuffix("_end") + "_begin"

@@ -1,0 +1,76 @@
+{
+  "description": "Short full receive-path traces for one D435 or D455 under the model-specific 60 FPS stress workload.",
+  "notes": [
+    "Each case warms up for 30 complete, fresh framesets and measures for 30 seconds.",
+    "D435 uses 960x540 RGB8 color; D455 uses its 848x480 RGB8 60 FPS color profile.",
+    "Run one selected serial and one case at a time so camera models are not confounded by mutual USB contention."
+  ],
+  "cases": [
+    {
+      "case_id": "d435_stress60_full_path_30s",
+      "workload": {
+        "class": "d435_stress_full_path",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "960x540_RGB8_60fps",
+        "infrared": "IR1+IR2_848x480_Y8_60fps"
+      },
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "shared_superspeed_hub_one_active_camera",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": [],
+        "stream_mode": "stereo_all",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      }
+    },
+    {
+      "case_id": "d455_stress60_full_path_30s",
+      "workload": {
+        "class": "d455_stress_full_path",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "848x480_RGB8_60fps",
+        "infrared": "IR1+IR2_848x480_Y8_60fps"
+      },
+      "physical": {
+        "camera_count": 1,
+        "hub_label": "shared_superspeed_hub_one_active_camera",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": [],
+        "stream_mode": "stereo_all",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 848,
+        "color_height": 480
+      }
+    }
+  ]
+}

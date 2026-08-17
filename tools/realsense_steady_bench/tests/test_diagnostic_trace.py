@@ -102,10 +102,12 @@ class DiagnosticTraceTests(unittest.TestCase):
                 (
                     EVENT.pack(1_100_020_000, 42, 1, 4, 9, 0, 10, 0),
                     EVENT.pack(1_100_030_000, 42, 1, 5, 9, 0, 10, 0),
+                    EVENT.pack(1_100_040_000, 42, 1, 26, -1, 0, 20, 0),
+                    EVENT.pack(1_100_050_000, 42, 1, 27, -1, 0, 20, 0),
                 )
             )
             header = HEADER.pack(
-                b"RSV4L2D", 1, HEADER_BYTES, EVENT.size, 0, 2, 2, 0
+                b"RSV4L2D", 1, HEADER_BYTES, EVENT.size, 0, 4, 4, 0
             )
             trace.write_bytes(header + bytes(HEADER_BYTES - len(header)) + events)
 
@@ -113,6 +115,7 @@ class DiagnosticTraceTests(unittest.TestCase):
 
             self.assertEqual(summary["dropped_event_count"], 0)
             self.assertEqual(summary["stages_ms"]["video_dqbuf"]["n"], 1)
+            self.assertEqual(summary["stages_ms"]["aggregator_enqueue"]["n"], 1)
             with (root / "v4l2_diagnostic_durations.csv").open(
                 newline="", encoding="utf-8"
             ) as handle:

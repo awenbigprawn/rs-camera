@@ -27,6 +27,7 @@ class RateMonotonicCommandTest(unittest.TestCase):
                     "camera_count": 2,
                     "measurement_duration_ms": 600000,
                     "warmup_frames": 300,
+                    "warmup_health_window_frames": 30,
                     "deadline_profile": "/source-profile.csv",
                     "deadline_allow_partial_profile": allow_partial_deadline,
                 }
@@ -57,6 +58,11 @@ class RateMonotonicCommandTest(unittest.TestCase):
         command = self._command("rr-rm")
         duration_index = command.index("--measurement-duration-ms")
         self.assertEqual(command[duration_index + 1], "600000")
+
+    def test_warmup_health_window_is_forwarded_to_probe(self):
+        command = self._command("rr-rm")
+        window_index = command.index("--warmup-health-window-frames")
+        self.assertEqual(command[window_index + 1], "30")
 
     def test_partial_deadline_profile_is_explicitly_forwarded(self):
         command = self._command("deadline", allow_partial_deadline=True)

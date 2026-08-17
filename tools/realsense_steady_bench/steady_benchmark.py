@@ -364,6 +364,7 @@ class RealSenseSteadyBench(Benchmark):
             ("frames", "--frames"),
             ("measurement_duration_ms", "--measurement-duration-ms"),
             ("warmup_frames", "--warmup-frames"),
+            ("warmup_health_window_frames", "--warmup-health-window-frames"),
             ("deadline_apply_after_frames", "--deadline-apply-after-frames"),
             ("frame_timeout_ms", "--frame-timeout-ms"),
             ("startup_timeout_ms", "--startup-timeout-ms"),

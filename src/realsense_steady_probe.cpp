@@ -77,6 +77,7 @@ struct options
     int fps = 30;
     int frames = 10000;
     int warmup_frames = 30;
+    int warmup_health_window_frames = 0;
     int frame_timeout_ms = 1500;
     int startup_timeout_ms = 15000;
     int measurement_duration_ms = 0;
@@ -144,6 +145,8 @@ options parse_args(int argc, char **argv)
             opts.frames = std::stoi(value(arg));
         else if (arg == "--warmup-frames")
             opts.warmup_frames = std::stoi(value(arg));
+        else if (arg == "--warmup-health-window-frames")
+            opts.warmup_health_window_frames = std::stoi(value(arg));
         else if (arg == "--frame-timeout-ms")
             opts.frame_timeout_ms = std::stoi(value(arg));
         else if (arg == "--startup-timeout-ms")
@@ -202,6 +205,7 @@ options parse_args(int argc, char **argv)
                 << "  --frames N                   Measured deliveries per camera\n"
                 << "  --measurement-duration-ms N Measure for a fixed wall-clock duration; zero uses --frames\n"
                 << "  --warmup-frames N\n"
+                << "  --warmup-health-window-frames N  Validate only the final N warm-up deliveries\n"
                 << "  --frame-timeout-ms N --startup-timeout-ms N\n"
                 << "  --measurement-timeout-ms N   Zero selects an automatic deadline\n"
                 << "  --fps N\n"
@@ -237,6 +241,10 @@ options parse_args(int argc, char **argv)
             "measurement-duration-ms and measurement-timeout-ms are mutually exclusive");
     if (opts.warmup_frames < 0 || opts.frame_timeout_ms <= 0 || opts.startup_timeout_ms <= 0)
         throw std::runtime_error("Invalid warm-up or timeout value");
+    if (opts.warmup_health_window_frames < 0 ||
+        opts.warmup_health_window_frames > opts.warmup_frames)
+        throw std::runtime_error(
+            "warmup-health-window-frames must be zero or no larger than warmup-frames");
     if (opts.delivery != "wait" && opts.delivery != "callback")
         throw std::runtime_error("Unsupported delivery mode: " + opts.delivery);
     if (opts.scheduler_apply_after_frames < 0)
@@ -440,6 +448,7 @@ int scheduler_apply_threshold(const options &opts)
 void record_delivery(camera_runtime &camera,
                      const rs2::frame &frame,
                      uint64_t host_ns,
+                     uint64_t host_realtime_ns,
                      double wait_ms,
                      const options &opts,
                      shared_control &control)
@@ -462,7 +471,9 @@ void record_delivery(camera_runtime &camera,
             ++metrics.warmup_deliveries;
             const uint64_t health_window = std::min(
                 static_cast<uint64_t>(opts.warmup_frames),
-                static_cast<uint64_t>(std::max(2, opts.fps)));
+                static_cast<uint64_t>(opts.warmup_health_window_frames > 0
+                    ? opts.warmup_health_window_frames
+                    : std::max(2, opts.fps)));
             const uint64_t health_start =
                 static_cast<uint64_t>(opts.warmup_frames) - health_window + 1;
             if (metrics.warmup_deliveries >= health_start)
@@ -541,14 +552,14 @@ void record_delivery(camera_runtime &camera,
                 for (auto &&child : frame.as<rs2::frameset>())
                 {
                     storage_error = record_measured_frame(
-                        metrics, child, host_ns, metrics.deliveries);
+                        metrics, child, host_ns, host_realtime_ns, metrics.deliveries);
                     if (!storage_error.empty())
                         break;
                 }
             }
             else if (storage_error.empty())
                 storage_error = record_measured_frame(
-                    metrics, frame, host_ns, metrics.deliveries);
+                    metrics, frame, host_ns, host_realtime_ns, metrics.deliveries);
 
             if (!fixed_duration_measurement(opts) &&
                 metrics.deliveries >= static_cast<uint64_t>(opts.frames))
@@ -607,12 +618,14 @@ void wait_loop(camera_runtime &camera,
             camera.pipeline_handle.get(),
             static_cast<unsigned int>(opts.frame_timeout_ms));
         const uint64_t end_ns = rs_trace_boottime_ns();
+        const uint64_t end_realtime_ns = rs_trace_realtime_ns();
         if (wait_result)
         {
             record_delivery(
                 camera,
                 wait_result.frame,
                 end_ns,
+                end_realtime_ns,
                 ns_to_ms(end_ns - begin_ns),
                 opts,
                 control);
@@ -895,6 +908,10 @@ void write_summary(const std::string &path,
         << ",\"frames_per_camera\":" << opts.frames
         << ",\"measurement_duration_ms\":" << opts.measurement_duration_ms
         << ",\"warmup_frames\":" << opts.warmup_frames
+        << ",\"warmup_health_window_frames\":"
+        << (opts.warmup_health_window_frames > 0
+                ? opts.warmup_health_window_frames
+                : std::min(opts.warmup_frames, std::max(2, opts.fps)))
         << ",\"scheduler_apply_after_frames\":"
         << (modeled_scheduler_requested(opts) ? scheduler_apply_threshold(opts) : 0)
         << ",\"deadline_apply_after_frames\":"
@@ -1041,7 +1058,9 @@ void write_events(const std::string &path,
     if (!out)
         throw std::runtime_error("Cannot open events output: " + path);
     out << "camera_index,serial,delivery,stream,stream_index,frame_number,"
-           "sensor_timestamp_ms,timestamp_domain,host_boottime_ns,relative_ms\n";
+           "sensor_timestamp_ms,timestamp_domain,frame_timestamp_ms,"
+           "backend_timestamp_ms,time_of_arrival_ms,host_boottime_ns,"
+           "host_realtime_ns,backend_to_return_ms,arrival_to_return_ms,relative_ms\n";
     out << std::fixed << std::setprecision(6);
     for (size_t i = 0; i < cameras.size(); ++i)
     {
@@ -1054,7 +1073,20 @@ void write_events(const std::string &path,
                 << event.stream_index << ","
                 << event.frame_number << "," << event.sensor_timestamp_ms << ","
                 << csv_field(rs2_timestamp_domain_to_string(event.timestamp_domain))
-                << "," << event.host_boottime_ns << ","
+                << "," << (event.has_frame_timestamp ? event.frame_timestamp_ms : 0.0)
+                << "," << (event.has_backend_timestamp ? event.backend_timestamp_ms : 0.0)
+                << "," << (event.has_time_of_arrival ? event.time_of_arrival_ms : 0.0)
+                << "," << event.host_boottime_ns
+                << "," << event.host_realtime_ns
+                << "," << (event.has_backend_timestamp
+                        ? static_cast<double>(event.host_realtime_ns) / 1e6
+                              - event.backend_timestamp_ms
+                        : 0.0)
+                << "," << (event.has_time_of_arrival
+                        ? static_cast<double>(event.host_realtime_ns) / 1e6
+                              - event.time_of_arrival_ms
+                        : 0.0)
+                << ","
                 << (event.host_boottime_ns >= origin_ns
                         ? ns_to_ms(event.host_boottime_ns - origin_ns)
                         : 0.0)
@@ -1145,7 +1177,14 @@ try
         if (opts.delivery == "callback")
         {
             camera.profile = camera.pipe.start(camera.config, [&, selected = &camera](rs2::frame frame) {
-                record_delivery(*selected, frame, rs_trace_boottime_ns(), -1.0, opts, control);
+                record_delivery(
+                    *selected,
+                    frame,
+                    rs_trace_boottime_ns(),
+                    rs_trace_realtime_ns(),
+                    -1.0,
+                    opts,
+                    control);
             });
         }
         else

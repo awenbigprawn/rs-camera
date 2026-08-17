@@ -22,6 +22,14 @@ static inline uint64_t rs_trace_boottime_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+static inline uint64_t rs_trace_realtime_ns(void)
+{
+    struct timespec ts;
+    /* Librealsense BACKEND_TIMESTAMP and TIME_OF_ARRIVAL use the epoch clock. */
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 static inline long rs_trace_gettid(void)
 {
     return syscall(SYS_gettid);

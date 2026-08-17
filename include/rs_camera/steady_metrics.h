@@ -14,11 +14,18 @@ namespace rs_camera::steady
 struct frame_event
 {
     uint64_t host_boottime_ns = 0;
+    uint64_t host_realtime_ns = 0;
     uint64_t delivery = 0;
     rs2_stream stream = RS2_STREAM_ANY;
     int stream_index = 0;
     uint64_t frame_number = 0;
     double sensor_timestamp_ms = 0.0;
+    double frame_timestamp_ms = 0.0;
+    double backend_timestamp_ms = 0.0;
+    double time_of_arrival_ms = 0.0;
+    bool has_frame_timestamp = false;
+    bool has_backend_timestamp = false;
+    bool has_time_of_arrival = false;
     rs2_timestamp_domain timestamp_domain = RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK;
 };
 
@@ -123,7 +130,8 @@ std::string warmup_health_error(const camera_metrics &metrics,
                                 bool allow_unsynchronized_color_reuse = false);
 std::string record_measured_frame(camera_metrics &metrics,
                                   const rs2::frame &frame,
-                                  uint64_t host_ns,
+                                  uint64_t host_boottime_ns,
+                                  uint64_t host_realtime_ns,
                                   uint64_t delivery);
 
 uint64_t total_drops(const camera_metrics &metrics);

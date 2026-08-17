@@ -217,7 +217,8 @@ std::string warmup_health_error(const camera_metrics &metrics,
 
 std::string record_measured_frame(camera_metrics &metrics,
                                   const rs2::frame &frame,
-                                  uint64_t host_ns,
+                                  uint64_t host_boottime_ns,
+                                  uint64_t host_realtime_ns,
                                   uint64_t delivery)
 {
     if (!frame)
@@ -236,6 +237,21 @@ std::string record_measured_frame(camera_metrics &metrics,
     auto &stream = found->second;
     const uint64_t number = frame.get_frame_number();
     const double sensor_ms = frame.get_timestamp();
+    const bool has_frame_timestamp =
+        frame.supports_frame_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP);
+    const bool has_backend_timestamp =
+        frame.supports_frame_metadata(RS2_FRAME_METADATA_BACKEND_TIMESTAMP);
+    const bool has_time_of_arrival =
+        frame.supports_frame_metadata(RS2_FRAME_METADATA_TIME_OF_ARRIVAL);
+    const double frame_timestamp_ms = has_frame_timestamp
+        ? static_cast<double>(frame.get_frame_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP))
+        : 0.0;
+    const double backend_timestamp_ms = has_backend_timestamp
+        ? static_cast<double>(frame.get_frame_metadata(RS2_FRAME_METADATA_BACKEND_TIMESTAMP))
+        : 0.0;
+    const double time_of_arrival_ms = has_time_of_arrival
+        ? static_cast<double>(frame.get_frame_metadata(RS2_FRAME_METADATA_TIME_OF_ARRIVAL))
+        : 0.0;
     if (stream.has_last)
     {
         if (stream.sensor_interarrival_ms.size() >=
@@ -254,23 +270,30 @@ std::string record_measured_frame(camera_metrics &metrics,
             sensor_ms - stream.last_sensor_timestamp_ms);
         append_without_reallocation(
             stream.host_interarrival_ms,
-            ns_to_ms(host_ns - stream.last_host_ns));
+            ns_to_ms(host_boottime_ns - stream.last_host_ns));
     }
     stream.has_last = true;
     stream.last_frame_number = number;
     stream.last_sensor_timestamp_ms = sensor_ms;
-    stream.last_host_ns = host_ns;
+    stream.last_host_ns = host_boottime_ns;
     stream.timestamp_domain = frame.get_frame_timestamp_domain();
     ++stream.frames;
     ++metrics.frames;
     append_without_reallocation(
         metrics.events,
-        frame_event{host_ns,
+        frame_event{host_boottime_ns,
+                    host_realtime_ns,
                     delivery,
                     stream_type,
                     stream_index,
                     number,
                     sensor_ms,
+                    frame_timestamp_ms,
+                    backend_timestamp_ms,
+                    time_of_arrival_ms,
+                    has_frame_timestamp,
+                    has_backend_timestamp,
+                    has_time_of_arrival,
                     stream.timestamp_domain});
     return {};
 }
