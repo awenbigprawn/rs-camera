@@ -88,8 +88,10 @@ __pycache__/
 # Paper manuscript maintained as an independent Git repository
 /paperwriting/
 
-# Local research notes and generated documentation
-/docu/
+# Keep local Chinese research notes while tracking English documentation.
+# Chinese source documents in docu/ must use the *_cn.md suffix.
+/docu/*_cn.md
+/docu/**/*_cn.md
 
 # Generated steady-state benchmark data
 /tools/realsense_steady_bench/results/
