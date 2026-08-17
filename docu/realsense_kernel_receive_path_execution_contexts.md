@@ -372,6 +372,60 @@ Without that implementation, the defensible statement is that Linux's default
 BH/UVC workqueue is fixed receive-path infrastructure, while this work
 explicitly controls xHCI IRQ and SDK workers and reports that boundary.
 
+### 6.4 Three-Configuration Kernel Comparison
+
+The three xHCI execution configurations must be distinguished explicitly if a
+future experiment aims to attribute an application-level latency change to IRQ
+threading or to PREEMPT_RT:
+
+| Configuration | Kernel and boot mode | xHCI execution context | Can the xHCI handler receive a POSIX scheduling policy? |
+|---|---|---|---|
+| A | Standard `CONFIG_PREEMPT`, without `threadirqs` | Hard-IRQ context | No; there is no independently schedulable xHCI task |
+| B | Standard `CONFIG_PREEMPT`, with `threadirqs` | `irq/<N>-xhci-hc` thread | Yes; the IRQ thread can receive an explicit policy and priority |
+| C | `CONFIG_PREEMPT_RT` | Normally an `irq/<N>-xhci-hc` thread | Yes; IRQ threading is part of the RT execution model |
+
+The differences have distinct interpretations:
+
+- A versus B measures the bundled effect of forcing IRQ threading on the
+  standard kernel and making the xHCI handler priority-controllable. It does
+  not measure the PREEMPT_RT patch.
+- B versus C measures the incremental effect of PREEMPT_RT after xHCI service
+  is already threaded. This difference also includes PREEMPT_RT changes to
+  kernel preemption, locking, priority inheritance, and softirq behavior.
+- A versus C is a deployment-level comparison between two complete kernel
+  configurations. It conflates IRQ threading with the other PREEMPT_RT
+  mechanisms and cannot attribute a result to either component alone.
+
+Only default-policy or otherwise execution-context-neutral treatments can be
+compared across all three configurations. An explicit xHCI RR or FIFO
+treatment is defined only for B and C. Configuration A has no xHCI task to
+which `chrt` can apply, and hard-IRQ execution must not be labeled as
+`SCHED_OTHER` because those mechanisms are not equivalent.
+
+A controlled three-configuration experiment should hold the kernel version,
+hardware, camera and USB topology, CPU frequency, UVC request pool, userspace
+binary, stream workload, affinity, and injected interference fixed. It should
+report both internal receive-path metrics---such as IRQ entry-to-thread-run,
+IRQ-to-URB-giveback, and SDK ready-to-running latency---and application-level
+inter-delivery and freshness metrics. Signed paired differences are required
+to claim an improvement; a mean absolute p99 difference reports only the size
+of a difference, not which configuration is faster.
+
+The existing P1 standard-kernel cells belong to configuration B: the standard
+kernel was deliberately booted with `threadirqs` so that the xHCI policy factor
+was operational. The existing matched P1 kernel result therefore compares B
+with C, not default hard-IRQ Linux with PREEMPT_RT. Its small application-level
+p99 difference does not establish that PREEMPT_RT is required or that it
+uniformly reduces frame-delivery latency. It instead shows that, once xHCI
+service is threaded, the observed gain is primarily associated with coordinated
+SDK/IRQ treatment rather than with PREEMPT_RT alone.
+
+This three-way experiment is unnecessary if the paper treats PREEMPT_RT as a
+chosen execution substrate rather than as an experimental factor. In that
+case, the defensible rationale is that PREEMPT_RT provides schedulable,
+priority-controllable IRQ service by design; it is not that PREEMPT_RT has
+already been shown to lower end-to-end camera latency in every condition.
+
 ## 7. Evidence Status
 
 | Finding | Status | Evidence |
