@@ -69,6 +69,8 @@ from steady_settings import (
 
 OVERRUN_KERNEL_TRACE = TOOL_DIR / "record_overrun_kernel_trace.sh"
 FRESHNESS_KERNEL_TRACE = TOOL_DIR / "record_freshness_kernel_trace.sh"
+FULL_PATH_KERNEL_TRACE = TOOL_DIR / "record_full_receive_path.sh"
+FULL_PATH_ANALYZER = TOOL_DIR / "analyze_full_receive_path.py"
 V4L2_DIAGNOSTIC_TRACE_CAPACITY = 12_000_000
 
 
@@ -82,6 +84,7 @@ class RealSenseSteadyBench(Benchmark):
         v4l2_diagnostics: bool,
         overrun_kernel_trace: bool,
         freshness_kernel_trace: bool,
+        full_path_kernel_trace: bool,
         use_sudo: bool,
         backend: str,
         rsusb_usb_devices: tuple[str, ...],
@@ -149,6 +152,7 @@ class RealSenseSteadyBench(Benchmark):
         )
         self._overrun_kernel_trace = overrun_kernel_trace
         self._freshness_kernel_trace = freshness_kernel_trace
+        self._full_path_kernel_trace = full_path_kernel_trace
         self._use_sudo = use_sudo
         self._drop_caches_before_run = CAMPAIGN_DROP_CACHES_BEFORE_RUN
         self._memory_cleanup_hook = memory_cleanup_hook
@@ -286,10 +290,25 @@ class RealSenseSteadyBench(Benchmark):
                 raise RuntimeError("--freshness-kernel-trace requires sudo")
             if shutil.which("trace-cmd") is None:
                 raise RuntimeError("--freshness-kernel-trace requires trace-cmd")
-        if self._overrun_kernel_trace and self._freshness_kernel_trace:
+        if self._full_path_kernel_trace:
+            if not self._use_sudo:
+                raise RuntimeError("--full-path-kernel-trace requires sudo")
+            if shutil.which("trace-cmd") is None:
+                raise RuntimeError("--full-path-kernel-trace requires trace-cmd")
+            if self._system_controls.config.rsusb_backend:
+                raise RuntimeError(
+                    "--full-path-kernel-trace requires the V4L2 backend"
+                )
+        kernel_trace_modes = sum(
+            (
+                self._overrun_kernel_trace,
+                self._freshness_kernel_trace,
+                self._full_path_kernel_trace,
+            )
+        )
+        if kernel_trace_modes > 1:
             raise RuntimeError(
-                "--overrun-kernel-trace and --freshness-kernel-trace "
-                "cannot wrap the same process simultaneously"
+                "kernel trace modes cannot wrap the same process simultaneously"
             )
 
         subprocess.check_call(
@@ -446,6 +465,7 @@ class RealSenseSteadyBench(Benchmark):
         freshness_kernel_trace_path = (
             attempt_dir / "freshness_kernel_trace.dat"
         )
+        full_path_kernel_trace_path = attempt_dir / "kernel_trace.dat"
         lime_dir = attempt_dir / "lime_trace"
         stdout_path = attempt_dir / "probe_stdout.txt"
         before = attempt_dir / "topology_before.json"
@@ -520,6 +540,13 @@ class RealSenseSteadyBench(Benchmark):
                 "sudo",
                 str(FRESHNESS_KERNEL_TRACE),
                 str(freshness_kernel_trace_path),
+                *command,
+            ]
+        elif self._full_path_kernel_trace:
+            command = [
+                "sudo",
+                str(FULL_PATH_KERNEL_TRACE),
+                str(full_path_kernel_trace_path),
                 *command,
             ]
 
@@ -669,6 +696,20 @@ class RealSenseSteadyBench(Benchmark):
                 (
                     attempt_dir / "freshness_kernel_trace_parse_error.txt"
                 ).write_text(
+                    f"{type(error).__name__}: {error}\n", encoding="utf-8"
+                )
+                if summary.get("success"):
+                    raise
+        if (
+            self._full_path_kernel_trace
+            and full_path_kernel_trace_path.is_file()
+        ):
+            try:
+                subprocess.check_call(
+                    [str(FULL_PATH_ANALYZER), str(attempt_dir)]
+                )
+            except Exception as error:
+                (attempt_dir / "full_path_parse_error.txt").write_text(
                     f"{type(error).__name__}: {error}\n", encoding="utf-8"
                 )
                 if summary.get("success"):

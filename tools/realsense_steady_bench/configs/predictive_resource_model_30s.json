@@ -1,0 +1,197 @@
+{
+  "description": "Thirty-second calibration and validation cases for a topology-aware predictive RealSense resource model.",
+  "notes": [
+    "All cases use 30 warm-up frames and a fixed 30-second measurement window.",
+    "D455 x2 uses two cameras behind one powered hub and one root xHCI controller.",
+    "D455 x3 concentrated and split-controller cases are held-out validation points; their userspace demand is predicted from the D455 x1 and x2 calibration cells before measurement, while USB payload and xHCI IRQ demand are reported per controller.",
+    "Mixed x4 uses three D455 cameras and one D435, with two cameras behind each powered hub/root xHCI controller.",
+    "The common 60 FPS profile enables depth, IR1, and IR2 but disables color so D435 and D455 measurements use the same stream profile; preflight established that this profile is an overload point for two D455 cameras on one controller and for the balanced four-camera topology.",
+    "The four-camera ladder adds depth-only 60 FPS, depth plus IR at 30 FPS, and depth plus color at 60 FPS to separate USB payload, activation-rate, and stream-composition effects.",
+    "The all-stream 60 FPS four-camera point is retained as an explicit overload case after three fresh-start attempts failed its warm-up freshness gate."
+  ],
+  "cases": [
+    {
+      "case_id": "predict_d435_n1_representative30",
+      "workload": {"class": "predictive_representative", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 1, "camera_models": "D435", "hub_label": "powered_usb3_hub", "root_hub_label": "xhci-hcd.1", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 1, "serials": ["948122073863"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "predict_d435_n1_common_stress60",
+      "workload": {"class": "predictive_common_stress", "measurement_seconds": 30, "depth": "848x480_Z16_60fps", "color": "disabled", "infrared": "IR1+IR2_848x480_Y8_60fps"},
+      "physical": {"camera_count": 1, "camera_models": "D435", "hub_label": "powered_usb3_hub", "root_hub_label": "xhci-hcd.1", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 1, "serials": ["948122073863"], "stream_mode": "depth_ir", "delivery": "wait", "frames": 1800, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 60, "depth_width": 848, "depth_height": 480, "color_width": 848, "color_height": 480}
+    },
+    {
+      "case_id": "predict_d455_n1_representative30",
+      "workload": {"class": "predictive_representative", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 1, "camera_models": "D455", "hub_label": "powered_usb3_hub", "root_hub_label": "xhci-hcd.1", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 1, "serials": ["311322302503"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "predict_d455_n1_common_stress60",
+      "workload": {"class": "predictive_common_stress", "measurement_seconds": 30, "depth": "848x480_Z16_60fps", "color": "disabled", "infrared": "IR1+IR2_848x480_Y8_60fps"},
+      "physical": {"camera_count": 1, "camera_models": "D455", "hub_label": "powered_usb3_hub", "root_hub_label": "xhci-hcd.1", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 1, "serials": ["311322302503"], "stream_mode": "depth_ir", "delivery": "wait", "frames": 1800, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 60, "depth_width": 848, "depth_height": 480, "color_width": 848, "color_height": 480}
+    },
+    {
+      "case_id": "predict_d455_n2_representative30",
+      "workload": {"class": "predictive_representative", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 2, "camera_models": "D455+D455", "hub_label": "one_powered_usb3_hub", "root_hub_label": "xhci-hcd.0", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 2, "serials": ["311322304911", "311322304863"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "predict_d455_n2_common_stress60",
+      "workload": {"class": "predictive_common_stress", "measurement_seconds": 30, "depth": "848x480_Z16_60fps", "color": "disabled", "infrared": "IR1+IR2_848x480_Y8_60fps"},
+      "physical": {"camera_count": 2, "camera_models": "D455+D455", "hub_label": "one_powered_usb3_hub", "root_hub_label": "xhci-hcd.0", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 2, "serials": ["311322304911", "311322304863"], "stream_mode": "depth_ir", "delivery": "wait", "frames": 1800, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 60, "depth_width": 848, "depth_height": 480, "color_width": 848, "color_height": 480}
+    },
+    {
+      "case_id": "validate_d455_n3_representative30",
+      "workload": {"class": "predictive_representative_validation", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 3, "camera_models": "D455+D455+D455", "hub_label": "one_powered_usb3_hub", "root_hub_label": "xhci-hcd.0", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 3, "serials": ["311322304911", "311322304863", "311322302503"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "validate_d455_n3_split_representative30",
+      "workload": {"class": "predictive_representative_validation", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 3, "camera_models": "D455+D455+D455", "hub_label": "two_powered_usb3_hubs", "root_hub_label": "two_xhci_controllers_d455_2_plus_1", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 3, "serials": ["311322304911", "311322304863", "311322302503"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "validate_mixed_n4_representative30",
+      "workload": {"class": "predictive_representative_validation", "measurement_seconds": 30, "depth": "848x480_Z16_30fps", "color": "640x480_RGB8_30fps", "infrared": "disabled"},
+      "physical": {"camera_count": 4, "camera_models": "D455+D455+D455+D435", "hub_label": "two_powered_usb3_hubs", "root_hub_label": "two_xhci_controllers_two_cameras_each", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 4, "serials": ["311322304911", "311322304863", "311322302503", "948122073863"], "stream_mode": "depth_color", "delivery": "wait", "frames": 900, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 30, "depth_width": 848, "depth_height": 480, "color_width": 640, "color_height": 480}
+    },
+    {
+      "case_id": "validate_mixed_n4_depth_only60",
+      "workload": {
+        "class": "predictive_capacity_ladder",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "disabled",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 4,
+        "camera_models": "D455+D455+D455+D435",
+        "hub_label": "two_powered_usb3_hubs",
+        "root_hub_label": "two_xhci_controllers_two_cameras_each",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 4,
+        "serials": [
+          "311322304911",
+          "311322304863",
+          "311322302503",
+          "948122073863"
+        ],
+        "stream_mode": "depth",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 848,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "validate_mixed_n4_depth_ir30",
+      "workload": {
+        "class": "predictive_capacity_ladder",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_30fps",
+        "color": "disabled",
+        "infrared": "IR1+IR2_848x480_Y8_30fps"
+      },
+      "physical": {
+        "camera_count": 4,
+        "camera_models": "D455+D455+D455+D435",
+        "hub_label": "two_powered_usb3_hubs",
+        "root_hub_label": "two_xhci_controllers_two_cameras_each",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 4,
+        "serials": [
+          "311322304911",
+          "311322304863",
+          "311322302503",
+          "948122073863"
+        ],
+        "stream_mode": "depth_ir",
+        "delivery": "wait",
+        "frames": 900,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 848,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "validate_mixed_n4_depth_color60",
+      "workload": {
+        "class": "predictive_capacity_ladder",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "640x480_RGB8_60fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 4,
+        "camera_models": "D455+D455+D455+D435",
+        "hub_label": "two_powered_usb3_hubs",
+        "root_hub_label": "two_xhci_controllers_two_cameras_each",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 4,
+        "serials": [
+          "311322304911",
+          "311322304863",
+          "311322302503",
+          "948122073863"
+        ],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "validate_mixed_n4_common_stress60",
+      "workload": {"class": "predictive_common_stress_validation", "measurement_seconds": 30, "depth": "848x480_Z16_60fps", "color": "disabled", "infrared": "IR1+IR2_848x480_Y8_60fps"},
+      "physical": {"camera_count": 4, "camera_models": "D455+D455+D455+D435", "hub_label": "two_powered_usb3_hubs", "root_hub_label": "two_xhci_controllers_two_cameras_each", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 4, "serials": ["311322304911", "311322304863", "311322302503", "948122073863"], "stream_mode": "depth_ir", "delivery": "wait", "frames": 1800, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 60, "depth_width": 848, "depth_height": 480, "color_width": 848, "color_height": 480}
+    },
+    {
+      "case_id": "validate_mixed_n4_all_streams60_overload",
+      "workload": {"class": "predictive_all_streams_overload", "measurement_seconds": 30, "depth": "848x480_Z16_60fps", "color": "848x480_RGB8_60fps", "infrared": "IR1+IR2_848x480_Y8_60fps"},
+      "physical": {"camera_count": 4, "camera_models": "D455+D455+D455+D435", "hub_label": "two_powered_usb3_hubs", "root_hub_label": "two_xhci_controllers_two_cameras_each", "usb_speed_label": "usb3_superspeed"},
+      "probe": {"camera_count": 4, "serials": ["311322304911", "311322304863", "311322302503", "948122073863"], "stream_mode": "stereo_all", "delivery": "wait", "frames": 1800, "measurement_duration_ms": 30000, "warmup_frames": 30, "warmup_health_window_frames": 10, "frame_timeout_ms": 1500, "startup_timeout_ms": 15000, "fps": 60, "depth_width": 848, "depth_height": 480, "color_width": 848, "color_height": 480}
+    }
+  ]
+}

@@ -26,9 +26,10 @@ std::vector<stream_descriptor> expected_streams(const std::string &stream_mode)
         return result;
     const bool stereo_all =
         stream_mode == "stereo_all" || stream_mode == "d435_all";
+    const bool depth_ir = stream_mode == "depth_ir";
     if (stream_mode == "depth_color" || stereo_all)
         result.push_back({RS2_STREAM_COLOR, 0});
-    if (stereo_all)
+    if (stereo_all || depth_ir)
     {
         result.push_back({RS2_STREAM_INFRARED, 1});
         result.push_back({RS2_STREAM_INFRARED, 2});
@@ -81,6 +82,8 @@ size_t expected_stream_count(const std::string &stream_mode)
         return 1;
     if (stream_mode == "depth_color")
         return 2;
+    if (stream_mode == "depth_ir")
+        return 3;
     if (stream_mode == "stereo_all" || stream_mode == "d435_all")
         return 4;
     return 0;

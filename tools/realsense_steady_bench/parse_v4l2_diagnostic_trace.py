@@ -48,6 +48,8 @@ STAGES = {
     27: "aggregator_enqueue_end",
     28: "pipeline_wait_begin",
     29: "pipeline_wait_end",
+    30: "format_convert_begin",
+    31: "format_convert_end",
 }
 PAIRS = {
     stage: stage.removesuffix("_end") + "_begin"

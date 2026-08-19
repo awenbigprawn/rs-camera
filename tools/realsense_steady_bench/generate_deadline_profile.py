@@ -137,7 +137,9 @@ def _split_logical_jobs(
     return groups, threshold
 
 
-def _minimum_stable_period_ns(groups: Sequence[Sequence[Mapping[str, Any]]]) -> int:
+def _stable_periods_ns(
+    groups: Sequence[Sequence[Mapping[str, Any]]],
+) -> List[int]:
     releases = [int(group[0]["release_ns"]) for group in groups if group]
     periods = [
         releases[index] - releases[index - 1]
@@ -150,7 +152,11 @@ def _minimum_stable_period_ns(groups: Sequence[Sequence[Mapping[str, Any]]]) -> 
     stable = [period for period in periods if 0.80 * median <= period <= 1.20 * median]
     if len(stable) < max(2, int(math.ceil(len(periods) * 0.50))):
         raise ValueError("logical period is not stable enough to model")
-    return min(stable)
+    return stable
+
+
+def _minimum_stable_period_ns(groups: Sequence[Sequence[Mapping[str, Any]]]) -> int:
+    return min(_stable_periods_ns(groups))
 
 
 def _maximum_job_execution_ns(
@@ -166,7 +172,11 @@ def _maximum_job_execution_ns(
     return max(maxima)
 
 
-def _trace_threads(path: Path) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], Dict[str, Any]]:
+def _trace_threads(
+    path: Path,
+    *,
+    require_sched_other: bool = True,
+) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], Dict[str, Any]]:
     attempt = _selected_attempt(path.resolve())
     lifecycle = attempt / "thread_lifecycle.jsonl"
     activations_path = attempt / "thread_steady_activations.csv"
@@ -194,13 +204,14 @@ def _trace_threads(path: Path) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], D
         if not thread_summary:
             raise ValueError(f"TID {tid} has no LiME steady-state summary")
         policy = str(thread_summary.get("policy") or "")
-        if "SCHED_OTHER" not in policy or "|" in policy:
+        if require_sched_other and ("SCHED_OTHER" not in policy or "|" in policy):
             raise ValueError(
                 f"TID {tid} source policy is {policy!r}, not a pure SCHED_OTHER trace"
             )
         groups, threshold = _split_logical_jobs(rows_by_tid.get(tid, []))
         try:
-            period_ns = _minimum_stable_period_ns(groups)
+            stable_periods_ns = _stable_periods_ns(groups)
+            period_ns = min(stable_periods_ns)
             execution_ns = _maximum_job_execution_ns(groups)
         except ValueError as error:
             raise ValueError(
@@ -212,6 +223,7 @@ def _trace_threads(path: Path) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], D
         result[key] = {
             "name": str(thread_summary.get("name") or lifecycle_name),
             "period_ns": period_ns,
+            "principal_period_ns": int(round(statistics.median(stable_periods_ns))),
             "execution_ns": execution_ns,
             "activation_count": len(rows_by_tid.get(tid, [])),
             "logical_job_count": len(groups),

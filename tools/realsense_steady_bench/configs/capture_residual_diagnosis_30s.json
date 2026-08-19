@@ -1,0 +1,117 @@
+{
+  "description": "Nested one-, two-, and four-camera representative traces for decomposing capture-worker CPU scaling residuals.",
+  "notes": [
+    "All cases use the same 30 FPS depth-plus-color profile and the same D455 as camera 0.",
+    "The two-camera set is a subset of the four-camera set so device identity is not confounded with camera count.",
+    "Use with LiME, V4L2 diagnostics, and the overrun kernel trace on the Raspberry Pi RT/UVC16 kernel."
+  ],
+  "cases": [
+    {
+      "case_id": "residual_nested_d455_n1_representative30",
+      "workload": {
+        "class": "capture_residual_diagnosis",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_30fps",
+        "color": "640x480_RGB8_30fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 1,
+        "camera_models": "D455",
+        "hub_label": "powered_usb3_hub_with_other_cameras_idle",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": ["311322304911"],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 900,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "residual_nested_d455_n2_representative30",
+      "workload": {
+        "class": "capture_residual_diagnosis",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_30fps",
+        "color": "640x480_RGB8_30fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 2,
+        "camera_models": "D455+D455",
+        "hub_label": "one_powered_usb3_hub",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 2,
+        "serials": ["311322304911", "311322304863"],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 900,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "residual_nested_mixed_n4_representative30",
+      "workload": {
+        "class": "capture_residual_diagnosis",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_30fps",
+        "color": "640x480_RGB8_30fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 4,
+        "camera_models": "D455+D455+D455+D435",
+        "hub_label": "two_powered_usb3_hubs",
+        "root_hub_label": "two_xhci_controllers_two_cameras_each",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 4,
+        "serials": [
+          "311322304911",
+          "311322304863",
+          "311322302503",
+          "948122073863"
+        ],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 900,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    }
+  ]
+}

@@ -29,19 +29,25 @@ esac
 
 cleanup()
 {
+    if [ -e "$tracefs/events/rsdiag/dl_runtime_exhausted/enable" ]; then
+        echo 0 > "$tracefs/events/rsdiag/dl_runtime_exhausted/enable" \
+            2>/dev/null || true
+    fi
     echo "-:$probe" >> "$tracefs/kprobe_events" 2>/dev/null || true
 }
 trap cleanup EXIT HUP INT TERM
 
-echo "-:$probe" >> "$tracefs/kprobe_events" 2>/dev/null || true
+# An interrupted trace-cmd process can leave the dynamic event registered.
+# Disable the event before removing it so that a later run can safely reuse
+# the same name.
+cleanup
 # Both archived 6.12.96 BTF builds place the post-throttle point at +0x1a0.
 # x19 is sched_dl_entity here; runtime is offset 64 and the flag word is 84.
 echo 'p:rsdiag/dl_runtime_exhausted update_curr_dl_se+0x1a0 runtime=+64(%x19):s64 flags=+84(%x19):u32' \
     >> "$tracefs/kprobe_events"
 
-# Include CPU0: the isolated benchmark workers run on CPUs 1-3, while the two
-# xHCI IRQs are deliberately pinned to housekeeping CPU0. Excluding CPU0 hid
-# the upstream USB interrupt behavior around a userspace overrun.
+# Record every CPU because xHCI IRQ service and camera workers can migrate when
+# the campaign does not apply affinity, taskset, or cgroup CPU isolation.
 # trace-cmd retains per-CPU ring data until the traced process exits. CPU0 sees
 # roughly 1,300 xHCI interrupts/s with two D435 cameras, so the small default
 # ring preserved only the tail of a ten-minute run. Allocate the ring before

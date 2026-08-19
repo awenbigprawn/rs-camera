@@ -199,7 +199,7 @@ options parse_args(int argc, char **argv)
                 << "Usage: " << argv[0] << " [options]\n"
                 << "  --serial SERIAL              Repeat for each selected camera\n"
                 << "  --camera-count N             Select the first N cameras when serials are omitted\n"
-                << "  --stream-mode depth|depth_color|stereo_all\n"
+                << "  --stream-mode depth|depth_color|depth_ir|stereo_all\n"
                 << "      d435_all remains a compatibility alias for stereo_all\n"
                 << "  --delivery wait|callback\n"
                 << "  --frames N                   Measured deliveries per camera\n"
@@ -384,6 +384,7 @@ void configure_streams(rs2::config &config, const options &opts, const std::stri
 {
     const bool stereo_all =
         opts.stream_mode == "stereo_all" || opts.stream_mode == "d435_all";
+    const bool depth_ir = opts.stream_mode == "depth_ir";
     config.enable_device(serial);
     config.enable_stream(
         RS2_STREAM_DEPTH, opts.depth_width, opts.depth_height, RS2_FORMAT_Z16, opts.fps);
@@ -394,9 +395,9 @@ void configure_streams(rs2::config &config, const options &opts, const std::stri
         config.enable_stream(
             RS2_STREAM_COLOR, opts.color_width, opts.color_height, RS2_FORMAT_RGB8, opts.fps);
     }
-    else
+    else if (!depth_ir)
         throw std::runtime_error("Unsupported stream mode: " + opts.stream_mode);
-    if (stereo_all)
+    if (stereo_all || depth_ir)
     {
         config.enable_stream(RS2_STREAM_INFRARED,
                              1,

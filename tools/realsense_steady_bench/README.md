@@ -194,6 +194,7 @@ Stream modes are:
 
 - `depth`: depth only;
 - `depth_color`: depth and RGB;
+- `depth_ir`: depth, infrared 1, and infrared 2 without RGB;
 - `stereo_all`: depth, RGB, infrared 1, and infrared 2 (`d435_all` is retained
   as a compatibility alias).
 

@@ -187,6 +187,15 @@ def main() -> None:
             "implies --v4l2-diagnostics"
         ),
     )
+    parser.add_argument(
+        "--full-path-kernel-trace",
+        action="store_true",
+        help=(
+            "record xHCI/HCD/UVC/V4L2, scheduler, IRQ, softirq, and "
+            "workqueue events for full receive-path correlation; implies "
+            "--v4l2-diagnostics"
+        ),
+    )
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
         "--backend",
@@ -609,10 +618,13 @@ def main() -> None:
         lime=args.lime,
         use_lime=not args.no_lime,
         v4l2_diagnostics=(
-            args.v4l2_diagnostics or args.freshness_kernel_trace
+            args.v4l2_diagnostics
+            or args.freshness_kernel_trace
+            or args.full_path_kernel_trace
         ),
         overrun_kernel_trace=args.overrun_kernel_trace,
         freshness_kernel_trace=args.freshness_kernel_trace,
+        full_path_kernel_trace=args.full_path_kernel_trace,
         use_sudo=not args.no_sudo,
         backend=args.backend,
         rsusb_usb_devices=tuple(args.rsusb_usb_devices),
