@@ -324,18 +324,14 @@ if [ "$BUILD_PROJECT" -eq 1 ]; then
         --target $BUILD_TARGETS \
         --parallel "$BUILD_JOBS"
 
-    cc \
-        -shared \
-        -fPIC \
-        -g \
-        -O2 \
-        -fno-omit-frame-pointer \
-        -Wall \
-        -Wextra \
-        -o "$BUILD_DIR/libtrace_pthreads.so" \
-        "$REPO_ROOT/tools/realsense_thread_trace/trace_pthreads.c" \
-        -ldl \
-        -pthread
+    PYTHONPATH="$REPO_ROOT/tools" "$VENV_DIR/bin/python" - "$REPO_ROOT" "$BUILD_DIR" <<'PYBUILD'
+from pathlib import Path
+import sys
+from realsense_bench_common.commands import build_pthread_tracer
+repo, build = map(Path, sys.argv[1:])
+build_pthread_tracer(output=build/'libtrace_pthreads.so',
+                     source=repo/'tools/realsense_thread_trace/trace_pthreads.c')
+PYBUILD
 
     echo "Build complete."
     echo "  LiME:   $REPO_ROOT/deps/lime-rtw/target/release/lime-rtw"

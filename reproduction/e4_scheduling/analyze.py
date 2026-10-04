@@ -2,6 +2,7 @@
 from analysis_common import *
 
 def analyze(repo, roots, out, artifacts, helper, archive, sections):
+    repetitions = getattr(helper, "REPETITIONS", 3)
     tool=repo/"tools/realsense_steady_bench"
     if 'e4' in sections:
         prep=module('paper_latency',HERE/'e4_scheduling/metrics.py')
@@ -14,12 +15,12 @@ def analyze(repo, roots, out, artifacts, helper, archive, sections):
                 expected_phase = 'rt-threaded' if row['kernel']=='rt' else ('standard-hardirq' if row['policy']=='OTHER' else 'standard-threaded')
                 if row['phase'] != expected_phase: raise ValueError(f'Unexpected E4 phase: {row}')
                 data.append(row); grouped[tuple(row[k] for k in ['kernel','workload','noise','policy'])].append(row)
-        if len(data)!=192 or len(grouped)!=64 or any(len(v)!=3 for v in grouped.values()):
-            raise ValueError('Expected 192 E4 runs, 64 cells, three repetitions each')
+        if len(data)!=64*repetitions or len(grouped)!=64 or any(len(v)!=repetitions for v in grouped.values()):
+            raise ValueError(f'Expected {64*repetitions} E4 runs, 64 cells, {repetitions} repetitions each')
         summary=[]
         for key,group in sorted(grouped.items()):
             matched=sum(r['matched_deliveries'] for r in group); total=sum(r['total_deliveries'] for r in group)
-            summary.append({**dict(zip(['kernel','workload','noise','policy'],key)),'runs':3,
+            summary.append({**dict(zip(['kernel','workload','noise','policy'],key)),'runs':repetitions,
                 'p99_ms':statistics.mean(r['p99_ms'] for r in group),'max_ms':max(r['max_ms'] for r in group),
                 'coverage':matched/total,'matched_deliveries':matched,'total_deliveries':total,
                 **{k:sum(r[k] for r in group) for k in ['problem_framesets','duplicate_components','sequence_gaps']}})
@@ -41,6 +42,6 @@ def analyze(repo, roots, out, artifacts, helper, archive, sections):
             raise ValueError('Expected 18 overhead runs in six cells')
         summary=[]
         for (workload,mode),group in sorted(grouped.items()):
-            summary.append({'workload':workload,'mode':mode,'runs':3,
+            summary.append({'workload':workload,'mode':mode,'runs':repetitions,
                 **{k:statistics.median(r[k] for r in group) for k in group[0] if k not in ['workload','mode','rep']}})
         write(out/'overhead_runs.csv',data);write(out/'overhead_summary.csv',summary)

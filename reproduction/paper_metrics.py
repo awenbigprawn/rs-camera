@@ -8,6 +8,7 @@ from statistics import fmean, median
 # Configured by E2's analysis adapter for each input/output directory.
 OUTPUT = Path('.')
 UVC_POOL_CELLS = {}
+REPETITIONS = 3
 
 def read_csv(path: Path, delimiter: str = ",") -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as source:
@@ -151,8 +152,8 @@ def prepare_uvc(sources: set[Path]) -> None:
                     values[name] += count
                 p99_values.append(float(row["delivery_interarrival_ms_p99"]))
                 max_values.append(float(row["delivery_interarrival_ms_max"]))
-            if values["runs"] != 3:
-                raise ValueError(f"Expected three UVC{urbs} runs for {fps}")
+            if values["runs"] != REPETITIONS:
+                raise ValueError(f"Expected {REPETITIONS} UVC{urbs} runs for {fps}")
             rows_out.append(
                 {
                     "fps": fps,

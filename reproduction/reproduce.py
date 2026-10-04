@@ -106,11 +106,13 @@ def camera_identity(cfg):
     return identity
 
 
-def prepare(repo, root, cfg, *, allow_irq_refresh=False):
+def prepare(repo, root, cfg, *, allow_irq_refresh=False, smoke=False, calibration_seconds=30):
     """Generate inspectable adapters; do not execute a campaign or patch the repo."""
     tool = repo / 'tools/realsense_steady_bench'
     if (root / 'prepared.json').exists():
         prior = json.loads((root / 'prepared.json').read_text())
+        if prior.get('smoke', False) != smoke or prior.get('calibration_seconds', 30) != calibration_seconds:
+            raise ValueError('Use a new output directory for a different capture protocol')
         same = prior['config'] == cfg
         if allow_irq_refresh:
             same = camera_identity(prior['config']) == camera_identity(cfg)
@@ -137,6 +139,32 @@ def prepare(repo, root, cfg, *, allow_irq_refresh=False):
         return text
 
     def write(name, text):
+        if smoke and name.endswith('.sh'):
+            seconds = calibration_seconds if name in {'e1.sh', 'e2-calibrate.sh', 'e4-calibrate.sh'} else 3
+            text = text.replace('--measurement-duration-seconds 30', f'--measurement-duration-seconds {seconds}')
+            text = text.replace('--measurement-duration-ms 30000', f'--measurement-duration-ms {seconds * 1000}')
+            text = text.replace('measurement_seconds=30', f'measurement_seconds={seconds}')
+            text = text.replace('--nb-runs 3', '--nb-runs 1')
+            text = text.replace('if len(rows) != 3:', 'if len(rows) != 1:')
+            text = text.replace('expected three repetitions', 'expected one smoke repetition')
+            text = text.replace('for repetition in 1 2 3;', 'for repetition in 1;')
+            text = text.replace('[ "$run_count" -eq 3 ]', '[ "$run_count" -eq 1 ]')
+            text = text.replace('while [ "$round" -le 3 ];', 'while [ "$round" -le 1 ];')
+            if name == 'e3.sh':
+                lines = text.splitlines(keepends=True)
+                # The closing quote belongs to the last matrix row; move it
+                # to the retained first repetition, preserving shell syntax.
+                begin = next(i for i, line in enumerate(lines) if line.startswith("matrix='"))
+                end = next(i for i in range(begin + 1, len(lines)) if lines[i].rstrip().endswith("'"))
+                retained = [line.rstrip("\n'") for line in lines[begin:end+1] if line.rstrip("\n'").endswith(':1')]
+                lines[begin:end+1] = ['\n'.join(retained) + "'\n"]
+                text = ''.join(lines)
+                text = text.replace('x 3 repetitions', 'x 1 smoke repetition')
+            if name == 'e3-one.sh':
+                text = text.replace('--duration 40', '--duration 8').replace('time.monotonic()+40.0', 'time.monotonic()+8.0')
+            text = text.replace('repetitions=3', 'repetitions=1')
+            text = text.replace('all 12 logical runs', 'all 4 smoke calibration runs')
+            text = text.replace('#!/bin/sh\n', '#!/bin/sh\n# SMOKE TEST: one repetition; not paper performance evidence.\n', 1)
         path = entry / name
         path.write_text(text)
         path.chmod(0o755)
@@ -180,7 +208,7 @@ def prepare(repo, root, cfg, *, allow_irq_refresh=False):
                         'output=' + q(root / 'e1'))
     # An analyzer failure must not be marked as a successful reproduced run.
     text = replace_once(text, 'python3 "$path_analyzer" "$attempt_dir" || true',
-                        'python3 "$path_analyzer" "$attempt_dir"')
+                        'python3 "$path_analyzer" "$attempt_dir" || return 1')
     write('e1.sh', text)
 
     text = config_paths(read('.d1_h1_single_d435_20260819.sh'))
@@ -271,7 +299,7 @@ def prepare(repo, root, cfg, *, allow_irq_refresh=False):
         '--recover-on-failure','full-reset','--max-attempts-per-run','3','--results-dir',str(root/'diagnosis')]
     for name, command in [('startup',startup),('overhead',overhead),('diagnosis',diagnosis)]:
         write(name+'.sh', '#!/bin/sh\nset -eu\ncd '+q(repo)+'\nexec '+shlex.join(command)+'\n')
-    manifest = {'repo':str(repo),'config':cfg,'adapter_sources':sources,
+    manifest = {'repo':str(repo),'config':cfg,'smoke':smoke,'calibration_seconds':calibration_seconds,'adapter_sources':sources,
                 'entrypoints':{p.name:digest(p) for p in sorted(entry.iterdir()) if p.is_file()}}
     (root/'prepared.json').write_text(json.dumps(manifest, indent=2)+'\n')
     return manifest
@@ -369,9 +397,10 @@ def patched_analyzer(text):
 
 
 def generate_profiles(repo, root):
+    repetitions = 1 if json.loads((root/'prepared.json').read_text()).get('smoke') else 3
     for camera in ('d435','d455'):
         for workload in ('representative30','stress60'):
-            logical = [root/'e1'/camera/workload/f'run-{n}' for n in (1,2,3)]
+            logical = [root/'e1'/camera/workload/f'run-{n}' for n in range(1, repetitions + 1)]
             selected = [p / ('attempt-'+(p/'selected_attempt.txt').read_text().strip()) for p in logical]
             output = root/'e1/profiles'/f'{camera}_{workload}.csv'
             output.parent.mkdir(parents=True,exist_ok=True)

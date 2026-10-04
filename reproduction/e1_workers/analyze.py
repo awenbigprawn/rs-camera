@@ -2,6 +2,7 @@
 from analysis_common import *
 
 def analyze(repo, roots, out, artifacts, helper, archive, sections):
+    repetitions = getattr(helper, "REPETITIONS", 3)
     tool=repo/"tools/realsense_steady_bench"
     if 'startup' in sections:
         builder=module('startup_builder',repo/'tools/realsense_startup_bench/build_startup_model.py')
@@ -36,7 +37,7 @@ def analyze(repo, roots, out, artifacts, helper, archive, sections):
         table=[]; instances=[]
         for camera in ('d435','d455'):
             for workload in ('representative30','stress60'):
-                paths=[attempt(roots['e1']/camera/workload/f'run-{n}') for n in (1,2,3)]
+                paths=[attempt(roots['e1']/camera/workload/f'run-{n}') for n in range(1,repetitions+1)]
                 for p in paths:
                     status=p/'steady_summary.json'; artifacts.add(status)
                     if not read(status).get('success'): raise ValueError(f'Unsuccessful E1 attempt: {p}')
@@ -63,7 +64,7 @@ def analyze(repo, roots, out, artifacts, helper, archive, sections):
                         ['signature','instance','observed_execution_max_ns','observed_logical_period_min_ns']}})
                     if sig in seen: continue
                     seen.add(sig)
-                    if len(usage[sig])!=3: raise ValueError('Worker missing from a repetition')
+                    if len(usage[sig])!=repetitions: raise ValueError('Worker missing from a repetition')
                     table.append({'camera':camera,'workload':workload,'family':label,'signature':sig,
                         'instances':t['role_instance_count'],
                         'execution_max_us':t['role_observed_execution_max_ns']/1000,

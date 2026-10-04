@@ -11,6 +11,7 @@ def main():
     ap.add_argument('--repo',type=Path,default=HERE.parent)
     ap.add_argument('--input',type=Path,required=True)
     ap.add_argument('--archive',action='store_true')
+    ap.add_argument('--smoke',action='store_true',help='Analyze one repetition per cell; never paper-performance evidence')
     ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--sections',nargs='+',choices=['startup','ablation','e1','e2','e3','e4','overhead','diagnosis'],default=['startup','ablation','e1','e2','e3','e4','overhead','diagnosis'])
     args=ap.parse_args(); repo=args.repo.resolve(); source=args.input.resolve(); out=args.output.resolve()
@@ -19,6 +20,7 @@ def main():
     tool=repo/'tools/realsense_steady_bench'
     sys.path.insert(0,str(tool))
     helper=module('paper_helpers',HERE/'paper_metrics.py')
+    helper.REPETITIONS = 1 if args.smoke else 3
     artifacts=set()
     if args.archive:
         results=source/'results' if (source/'results').is_dir() else source
@@ -48,8 +50,12 @@ def main():
         analyzer.analyze(repo, roots, destination, artifacts, helper, args.archive, selected)
         if directory.split('_')[0] in selected:
             plotter = module(directory + '_plot', HERE / directory / 'plot.py')
-            plotter.plot(destination, repo)
-    (out/'manifest.json').write_text(json.dumps({'sections':args.sections,'archive':args.archive,
+            options = {'repetitions': helper.REPETITIONS} if directory == 'e4_scheduling' else {}
+            plotter.plot(destination, repo, **options)
+            if args.smoke:
+                for figure in destination.glob('*.tex'):
+                    figure.write_text(r'\textbf{SMOKE TEST --- one repetition; not paper results}\par\medskip'+'\n'+figure.read_text())
+    (out/'manifest.json').write_text(json.dumps({'sections':args.sections,'archive':args.archive,'smoke':args.smoke,
         'latency_source':'existing per-run summaries; no silent raw-trace reanalysis',
         'source_files':[{'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(artifacts)]},indent=2)+'\n')
     print(f'Exported {args.sections} to {out}')

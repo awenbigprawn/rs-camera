@@ -14,6 +14,41 @@ import reproduce
 
 
 class PipelineTests(unittest.TestCase):
+    def test_boot_waits_for_ethernet_without_weakening_timeout(self):
+        with patch.object(pipeline.Path,'exists',return_value=True), \
+             patch.object(pipeline.Path,'read_text',side_effect=['down','up']), \
+             patch.object(pipeline.time,'monotonic',return_value=0), \
+             patch.object(pipeline.time,'sleep') as sleep, \
+             patch.dict(pipeline.os.environ,{'SSH_CONNECTION':''}):
+            pipeline.check_wired(wait_seconds=60)
+            sleep.assert_called_once_with(1)
+        with patch.object(pipeline.Path,'exists',return_value=False), \
+             patch.object(pipeline.time,'monotonic',side_effect=[0,61]), \
+             patch.object(pipeline.time,'sleep') as sleep:
+            with self.assertRaisesRegex(ValueError,'active eth0'):
+                pipeline.check_wired(wait_seconds=60)
+            sleep.assert_not_called()
+
+    def test_smoke_covers_all_main_stages_and_omits_supplements(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            pipeline.save(root/'pipeline.json', {'smoke':True})
+            stages=[s for _,_,group in pipeline.phases(root) for s in group]
+            self.assertEqual(set(stages), set(reproduce.STAGES)-{'startup','ablation','overhead','diagnosis'})
+            self.assertEqual(len(stages),len(set(stages)))
+
+    def test_rust_is_checked_in_setup_user_environment_before_sudo(self):
+        for uid in (1000, 0):
+            with self.subTest(uid=uid), patch.object(pipeline, 'require_pi'), \
+                 patch.object(pipeline.os, 'geteuid', return_value=uid), \
+                 patch.object(pipeline, 'root_access', side_effect=SystemExit), \
+                 patch.object(pipeline, 'call') as call:
+                with self.assertRaises(SystemExit):
+                    pipeline.full(None)
+                self.assertEqual(call.call_count, int(uid != 0))
+                if uid != 0:
+                    self.assertEqual(call.call_args.args[0][-1], '--rust')
+
     def initialize(self, root, active=None):
         (root/'entrypoints').mkdir()
         (root/'completed').mkdir()
@@ -62,6 +97,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(len(captures),len(reproduce.STAGES))
                 self.assertEqual(set(captures),set(reproduce.STAGES))
                 self.assertEqual(len(analyses),1); self.assertEqual(len(renders),1)
+                self.assertEqual((root/'derived').stat().st_mode & 0o777,0o755)
                 self.assertEqual(commands.count(['systemctl','reboot']),5)
                 restore.assert_called_once_with(root)
 

@@ -25,6 +25,11 @@ Both generate PDFs by default; use `--no-pdf` for CSV and TeX only.
 See [the two-level guide](reproduction/README.md) for inputs, output locations,
 progress, failure handling and per-experiment instructions.
 
+For a [quick hardware check](reproduction/README.md#quick-smoke-test), run
+`./reproduce.sh full --smoke --no-pdf`: one 3-second measurement per main
+configuration, with 30-second calibration windows for scheduling profiles.
+Smoke outputs are labelled and do not establish paper-performance equivalence.
+
 ## Repository layout
 
 - src/: every librealsense test executable, including the reusable D435 startup

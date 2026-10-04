@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,77 @@ import reproduce
 REPO=ROOT.parent
 
 class ReproductionTests(unittest.TestCase):
+    def test_e4_plot_accepts_explicit_smoke_but_keeps_formal_repetition_check(self):
+        from analysis_common import module
+        from itertools import product
+        plotter=module('test_e4_plot',ROOT/'e4_scheduling/plot.py')
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            data=[dict(zip(('kernel','workload','noise','policy'),cell),
+                       p99_ms=2,max_ms=3,problem_framesets=0)
+                  for cell in product(('standard','rt'),('30 FPS','60 FPS'),
+                                      ('None','CPU','Memory','GPU'),('OTHER','RR-RM','FIFO-RM','Deadline'))]
+            for name in ('summary','runs'):
+                with (root/f'main_matrix_host_latency_{name}.csv').open('w') as stream:
+                    writer=csv.DictWriter(stream,fieldnames=list(data[0]))
+                    writer.writeheader(); writer.writerows(data)
+            with self.assertRaisesRegex(ValueError,'3 latency runs'):
+                plotter.plot(root,REPO)
+            plotter.plot(root,REPO,repetitions=1)
+            self.assertTrue((root/'e4-p99.tex').is_file())
+            self.assertTrue((root/'e4-max.tex').is_file())
+
+    def test_e3_selected_attempt_survives_copy_to_another_host(self):
+        spec=importlib.util.spec_from_file_location('e3_analysis',ROOT/'e3_kernel_path/analyze.py')
+        analysis=importlib.util.module_from_spec(spec); spec.loader.exec_module(analysis)
+        with tempfile.TemporaryDirectory() as temp:
+            cell=Path(temp); selected=cell/'attempt-2'; selected.mkdir()
+            marker=cell/'SELECTED'; marker.write_text('/original/pi/result/attempt-2\n')
+            self.assertEqual(analysis.selected_attempt_path(marker),selected)
+            marker.write_text('/original/pi/result/attempt-3\n')
+            with self.assertRaisesRegex(ValueError,'Missing selected attempt'):
+                analysis.selected_attempt_path(marker)
+            marker.write_text('../../unexpected\n')
+            with self.assertRaisesRegex(ValueError,'Invalid selected attempt'):
+                analysis.selected_attempt_path(marker)
+
+    def test_smoke_retains_every_cell_but_uses_one_short_measurement(self):
+        cfg=reproduce.load_config(ROOT/'setup/config.pi5.json')
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            reproduce.prepare(REPO,root,cfg,smoke=True,calibration_seconds=30)
+            for script in (root/'entrypoints').glob('*.sh'):
+                subprocess.run(['sh','-n',str(script)],check=True)
+            entry=root/'entrypoints'
+            self.assertIn('--measurement-duration-ms 30000',(entry/'e1.sh').read_text())
+            self.assertIn('for repetition in 1;', (entry/'e1.sh').read_text())
+            self.assertIn('if len(rows) != 1:', (entry/'e2-urb5.sh').read_text())
+            for name in ('e2-urb5','e2-urb16','e3-one','e4-standard-hardirq','e4-standard-threaded','e4-rt-threaded'):
+                text=(entry/(name+'.sh')).read_text()
+                self.assertIn('--measurement-duration-seconds 3 ',text)
+                self.assertNotIn('--measurement-duration-seconds 30 ',text)
+            matrix=(entry/'e3.sh').read_text().split("matrix='")[1].split("'")[0].splitlines()
+            self.assertEqual(len(matrix),6)
+            self.assertTrue(all(row.endswith(':1') for row in matrix))
+            with self.assertRaisesRegex(ValueError,'different capture protocol'):
+                reproduce.prepare(REPO,root,cfg)
+
+    def test_e1_analyzer_failure_cannot_write_selected_attempt(self):
+        cfg=reproduce.load_config(ROOT/'setup/config.pi5.json')
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); reproduce.prepare(REPO,root,cfg)
+            text=(root/'entrypoints/e1.sh').read_text()
+            block=text[text.index('        if [ "$valid" = true ]; then'):]
+            block=block[:block.index('        echo "[C1] failed')]
+            analyzer=root/'failing.py'; analyzer.write_text('raise SystemExit(1)\n')
+            script='run_case() {\n'+block+'\n}\nif run_case; then exit 7; fi\n'
+            env={**os.environ,'valid':'true','path_analyzer':str(analyzer),
+                 'attempt_dir':str(root),'logical_dir':str(root),'manifest':str(root/'manifest'),
+                 'attempt':'1','model':'d435','workload':'stress60','repetition':'1'}
+            result=subprocess.run(['sh','-c',script],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertFalse((root/'selected_attempt.txt').exists())
+
     def test_upper_cutoff_removed_but_negative_and_unmatched_not_accepted(self):
         path=REPO/'tools/realsense_steady_bench/analyze_full_receive_path.py'
         source=path.read_text()

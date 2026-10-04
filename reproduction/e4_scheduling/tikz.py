@@ -34,7 +34,7 @@ def fmt(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
-def main() -> None:
+def main(repetitions: int = 3) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metric", choices=("p99", "max"), default="p99")
     parser.add_argument("--output", type=Path)
@@ -56,8 +56,8 @@ def main() -> None:
         runs[
             (row["kernel"], row["workload"], row["noise"], row["policy"])
         ].append(float(row[metric_key]))
-    if len(summary) != 64 or any(len(values) != 3 for values in runs.values()):
-        raise ValueError("Expected 64 cells with three latency runs per cell")
+    if len(summary) != 64 or runs.keys() != summary.keys() or any(len(values) != repetitions for values in runs.values()):
+        raise ValueError(f"Expected 64 cells with {repetitions} latency runs per cell")
     if args.metric == "max":
         for key, points in runs.items():
             if max(points) != float(summary[key][metric_key]):

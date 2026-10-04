@@ -9,6 +9,8 @@ differs. Run from the **rs-camera repository root**.
 | [Level 1: raw data to paper results](#level-1-raw-data-to-paper-results) | Supplied archived experiment data | `./reproduce.sh raw` | Laptop, Python environment, raw package; no camera or sudo |
 | [Level 2: complete hardware reproduction](#level-2-complete-hardware-reproduction) | Newly acquired measurements | `./reproduce.sh full` | Configured Raspberry Pi 5, cameras and all three installed kernels |
 
+To check a prepared Pi first, use the [3-second smoke test](#quick-smoke-test).
+
 ## Level 1: raw data to paper results
 
 Prepare the Python environment described in [step 2](#2-verify-the-software-or-reconstruct-archived-results).
@@ -239,3 +241,49 @@ omitted. The independent manuscript checkout is not a runtime dependency.
 
 See [dependency locks](../dependencies/README.md) for fixed source commits,
 Python libraries, Rust toolchain and the Pi system package profile.
+
+## Quick smoke test
+
+On a prepared Pi, check all main-experiment configurations using one repetition
+and **3-second measurement windows**:
+
+```sh
+./reproduce.sh full --smoke --no-pdf
+./reproduce.sh status --output reproduction/runs/smoke
+```
+
+The calibration windows remain 30 seconds, once per workload: 3-second traces
+cannot estimate workers with 5-second timer periods. This is eight calibration
+windows (four minutes total), followed by 4 E2, 6 E3 and 64 E4 short runs. Camera
+resets, warm-up, parsing and kernel reboots take additional time. Startup,
+stream-ablation, overhead and the 600-second diagnostic supplements are omitted.
+The normal full-reproduction protocol is unchanged.
+
+The smoke manifest records its protocol and generated figures are visibly
+labelled. Short traces validate execution and parsing, not performance claims.
+Use `python3 reproduction/analyze.py --input reproduction/runs/smoke --output
+reproduction/derived-smoke --smoke --sections e1 e2 e3 e4` for manual analysis;
+compile its figures with `python3 reproduction/render.py reproduction/derived-smoke`.
+`--calibration-seconds 3` explicitly tests the too-short calibration path; it may
+stop with insufficient observations and does not silently fabricate a profile.
+
+### Hardware verification, 2026-10-04
+
+The smoke protocol was exercised on a Pi 5 with two D435 cameras and a D455F,
+using the pinned dependencies and all three required kernels. All 74 measurement
+captures succeeded: 4 E2, 6 E3 and 64 E4 configurations, once each. Recorded
+measurement windows ranged from 3000.057 to 3001.685 ms. All eight 30-second
+calibration captures also succeeded. E4 latency matching covered at least 98.89%
+of deliveries, above the unchanged 95% acceptance threshold.
+
+The first automatic export exposed E4's hard-coded three-repetition plot check.
+After fixing it, the same captured data passed the corrected pipeline analysis
+entry point on the laptop and produced all five PDFs; no acquisition was repeated.
+The original failed export log was retained. A backup verified 5,823 files with
+no differences, and the Pi's saved next-boot settings were restored. The service
+was disabled after the run. This is a functional check, not a completed formal
+30-second, three-repetition paper replication; supplements were not exercised.
+
+Regression checks passed 28 tests. Re-analysis of the archived paper data
+regenerated 17 CSV and five TeX files byte-for-byte identically to the prior
+exports, preserving the normal protocol and figure style.

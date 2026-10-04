@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 import reproduce
 from setup.kernel import VARIANTS
@@ -57,7 +58,8 @@ def py(script, *args, **kwargs):
 
 def require_analysis(pdf):
     call([sys.executable, REPO/'scripts/check_dependencies.py', '--sources', '--python'])
-    call([sys.executable, '-c', 'import numpy; import benchkit'])
+    with tempfile.TemporaryDirectory(prefix='rs-camera-analysis-check-') as temp:
+        call([sys.executable, '-c', 'import numpy; import benchkit'], env={**os.environ, 'TMPDIR':temp})
     for name in ('paper_metrics.py', 'e4_scheduling/metrics.py', 'e4_scheduling/tikz.py'):
         if not (HERE/name).is_file():
             raise ValueError(f'Missing tracked reproduction helper: {name}')
@@ -74,6 +76,8 @@ def require_empty(root):
 def analyze(source, output, archive, pdf, log):
     command = ['--input', source, '--output', output]
     if archive: command.append('--archive')
+    elif (source/'prepared.json').exists() and read(source/'prepared.json').get('smoke'):
+        command += ['--smoke', '--sections', 'e1', 'e2', 'e3', 'e4']
     py('analyze.py', *command, log=log)
     if pdf: py('render.py', output, log=log)
 
@@ -121,8 +125,18 @@ def complete(root, stage):
     return True
 
 
+def phases(root, smoke=None):
+    if smoke is None:
+        state = read(root/'pipeline.json') if (root/'pipeline.json').exists() else {}
+        smoke = state.get('smoke', False)
+    if not smoke: return PHASES
+    supplements = {'startup', 'ablation', 'overhead', 'diagnosis'}
+    return [(variant, threaded, [s for s in stages if s not in supplements])
+            for variant, threaded, stages in PHASES]
+
+
 def next_phase(root):
-    for variant, threaded, stages in PHASES:
+    for variant, threaded, stages in phases(root):
         pending = [stage for stage in stages if not complete(root, stage)]
         if pending: return variant, threaded, pending
     return None
@@ -159,6 +173,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory={systemd_path(REPO)}
+Environment=SUDO_UID={REPO.stat().st_uid} SUDO_GID={REPO.stat().st_gid}
 ExecStartPre=/usr/bin/udevadm settle --timeout=30
 ExecStart={executable} {script} _worker --output {destination}
 TimeoutStartSec=infinity
@@ -206,10 +221,13 @@ def restore_system(root):
     os.sync()
 
 
-def check_wired():
+def check_wired(wait_seconds=0):
     eth = Path('/sys/class/net/eth0/operstate')
-    if not eth.exists() or eth.read_text().strip() != 'up':
-        raise ValueError('Full mode requires an active eth0 connection before disabling Wi-Fi')
+    deadline = time.monotonic() + wait_seconds
+    while not eth.exists() or eth.read_text().strip() != 'up':
+        if time.monotonic() >= deadline:
+            raise ValueError('Full mode requires an active eth0 connection before disabling Wi-Fi')
+        time.sleep(1)
     peer = os.environ.get('SSH_CONNECTION', '').split()
     if peer:
         route = subprocess.check_output(['ip', 'route', 'get', peer[0]], text=True)
@@ -219,6 +237,10 @@ def check_wired():
 
 def full(args):
     require_pi()
+    # rustup belongs to the setup user. sudo changes HOME; the root runtime
+    # does not need its own copy of the build-only Rust toolchain.
+    if os.geteuid() != 0:
+        call([sys.executable, REPO/'scripts/check_dependencies.py', '--rust'])
     root_access()
     root = args.output.resolve()
     require_empty(root)
@@ -226,7 +248,7 @@ def full(args):
     check_unit_available(root)
     require_analysis(not args.no_pdf)
     check_wired()
-    call([sys.executable, REPO/'scripts/check_dependencies.py', '--system', '--rust'])
+    call([sys.executable, REPO/'scripts/check_dependencies.py', '--system'])
     for variant in VARIANTS: py('setup/kernel.py', 'select', variant)  # dry-run, all boot artifacts must exist
     # Check common build prerequisites using one stage while deferring its boot/Wi-Fi requirements.
     root.mkdir(parents=True, exist_ok=True)
@@ -237,11 +259,11 @@ def full(args):
     errors = [e for e in reproduce.check(REPO, root, 'e1', cfg)
               if not e.startswith(('Boot kernel ', 'Paper runs disable Wi-Fi'))]
     if errors: raise ValueError('\n'.join(errors))
-    reproduce.prepare(REPO, root, cfg)
+    reproduce.prepare(REPO, root, cfg, smoke=args.smoke, calibration_seconds=args.calibration_seconds)
     py('bundle_sources.py', '--output', root/'source-snapshot.tar.gz', '--exclude', root)
     snapshot_system(root)
     save(root/'pipeline.json', dict(level='full', status='queued', repo=str(REPO), started_at=now(),
-         pdf=not args.no_pdf, active_stage=None, pending_boot=None))
+         pdf=not args.no_pdf, smoke=args.smoke, calibration_seconds=args.calibration_seconds, active_stage=None, pending_boot=None))
     UNIT.write_text(unit)
     call(['systemctl', 'daemon-reload'])
     call(['systemctl', 'enable', SERVICE])
@@ -269,7 +291,7 @@ def refresh_boot_config(root, boot_id):
             raise ValueError(f'Prepared adapter was modified: {name}')
     if old != new:
         save(folder/'prepared-before-irq-refresh.json', previous)
-        reproduce.prepare(REPO, root, new, allow_irq_refresh=True)
+        reproduce.prepare(REPO, root, new, allow_irq_refresh=True, smoke=previous.get('smoke', False), calibration_seconds=previous.get('calibration_seconds', 30))
         shutil.copy2(config, root/'camera-config.json')
     save(folder/'prepared.json', read(root/'prepared.json'))
 
@@ -277,6 +299,9 @@ def refresh_boot_config(root, boot_id):
 def worker(root):
     require_pi()
     if os.geteuid() != 0: raise ValueError('Worker must run in the installed root service')
+    temporary = root/'private-tmp'
+    temporary.mkdir(mode=0o700, exist_ok=True)
+    os.environ['TMPDIR'] = str(temporary)
     state = read(root/'pipeline.json')
     if state['repo'] != str(REPO): raise ValueError('Repository moved since preparation')
     lock = (root/'pipeline.lock').open('w')
@@ -287,7 +312,8 @@ def worker(root):
         raise
     try:
         verify_sources(root)
-        check_wired()
+        # network-online.target can precede Ethernet carrier after a Pi reboot.
+        check_wired(wait_seconds=60)
         stage = state.get('active_stage')
         if stage and not complete(root, stage):
             raise ValueError(f'{stage} was interrupted without a completion marker; keep partial data and start a new campaign')
@@ -328,6 +354,7 @@ def worker(root):
         if not output.exists():
             pending_output = Path(tempfile.mkdtemp(prefix='analysis-attempt-', dir=root))
             analyze(root, pending_output, False, False, root/'analysis.log')
+            pending_output.chmod(0o755)
             pending_output.rename(output)
         if not (output/'manifest.json').exists(): raise ValueError('Incomplete derived output; preserve it before retrying analysis')
         if state['pdf']: py('render.py', output, log=root/'analysis.log')
@@ -351,7 +378,7 @@ def control(args):
     if args.action == 'status':
         print(json.dumps(state, indent=2))
         if state['level'] == 'full':
-            print('Completed:', ', '.join(s for _,_,stages in PHASES for s in stages if complete(root,s)))
+            print('Completed:', ', '.join(s for _,_,stages in phases(root) for s in stages if complete(root,s)))
             print(f'Log: journalctl -u {SERVICE} -f')
         return
     if state['level'] != 'full': raise ValueError('resume/stop apply only to full-mode campaigns')
@@ -384,12 +411,16 @@ def main():
     ap.add_argument('--input', type=Path, default=REPO/'paperwriting/paper_used_raw_data', help='raw-data package (raw mode)')
     ap.add_argument('--output', type=Path, help='new output directory, or campaign to inspect/control')
     ap.add_argument('--config', type=Path, default=HERE/'setup/config.json', help='optional existing camera role selection (full mode)')
+    ap.add_argument('--smoke', action='store_true', help='3-second measurements, one repetition per main-experiment cell; omit supplements')
+    ap.add_argument('--calibration-seconds', type=int, choices=[3,30], default=30, help='smoke calibration duration; 3 seconds may not observe timer workers')
     ap.add_argument('--no-pdf', action='store_true', help='emit CSV/TeX without compiling PDF; default requires TeX')
     args = ap.parse_args()
-    args.output = args.output or (HERE/'derived-raw' if args.action=='raw' else HERE/'runs/full')
+    args.output = args.output or (HERE/'derived-raw' if args.action=='raw' else HERE/('runs/smoke' if args.smoke else 'runs/full'))
     if args.action=='plan':
         print('raw: verify supplied checksums -> analyze E1-E4 + supplements -> CSV/TeX/PDF')
-        for variant, threaded, stages in PHASES:
+        if args.smoke:
+            print(f'full --smoke: 3-second measurements, one repetition; {args.calibration_seconds}-second calibrations; no supplements')
+        for variant, threaded, stages in phases(args.output, args.smoke):
             print(f'full: {variant}, threadirqs={threaded}: '+', '.join(stages))
         print('full: analyze all -> CSV/TeX/PDF -> restore saved next-boot configuration and Wi-Fi link -> disable service')
         return
