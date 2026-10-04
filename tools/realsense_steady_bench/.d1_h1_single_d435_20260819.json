@@ -1,0 +1,78 @@
+{
+  "description": "Single-D435 D1/H1 host-path comparison with 30-second measurement windows.",
+  "notes": [
+    "Only librealsense serial 948122073863 is opened.",
+    "Every case warms up for 30 fresh framesets before four SCHED_OTHER register-only CPU workers start.",
+    "The representative and stress stream profiles match the paper workloads."
+  ],
+  "cases": [
+    {
+      "case_id": "d1_h1_d435_representative30",
+      "workload": {
+        "class": "representative",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_30fps",
+        "color": "640x480_RGB8_30fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 1,
+        "camera_models": "D435",
+        "hub_label": "record_from_topology_snapshot",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": ["948122073863"],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 1000,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 30,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 640,
+        "color_height": 480
+      }
+    },
+    {
+      "case_id": "d1_h1_d435_stress60",
+      "workload": {
+        "class": "stress",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "960x540_RGB8_60fps",
+        "infrared": "IR1+IR2_848x480_Y8_60fps"
+      },
+      "physical": {
+        "camera_count": 1,
+        "camera_models": "D435",
+        "hub_label": "record_from_topology_snapshot",
+        "root_hub_label": "record_from_topology_snapshot",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": ["948122073863"],
+        "stream_mode": "stereo_all",
+        "delivery": "wait",
+        "frames": 2000,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 30,
+        "warmup_health_window_frames": 10,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      }
+    }
+  ]
+}

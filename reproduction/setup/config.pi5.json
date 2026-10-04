@@ -1,0 +1,37 @@
+{
+  "cameras": {
+    "d435_a": {
+      "model": "D435",
+      "serial": "327122075717",
+      "xhci_irq": 132,
+      "xhci_label": "xhci-hcd:usb2"
+    },
+    "d435_b": {
+      "model": "D435",
+      "serial": "948122073863",
+      "xhci_irq": 137,
+      "xhci_label": "xhci-hcd:usb4"
+    },
+    "d455_a": {
+      "model": "D455F",
+      "serial": "311322304911",
+      "xhci_irq": 132,
+      "xhci_label": "xhci-hcd:usb2"
+    },
+    "d455_b": {
+      "model": "D455F",
+      "serial": "311322304863",
+      "xhci_irq": 137,
+      "xhci_label": "xhci-hcd:usb4"
+    }
+  },
+  "selection": {
+    "d435_pair": [
+      "d435_a",
+      "d435_b"
+    ],
+    "single_d435": "d435_b",
+    "single_d455": "d455_a",
+    "startup_d435": "d435_a"
+  }
+}

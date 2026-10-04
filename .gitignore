@@ -106,3 +106,12 @@ __pycache__/
 
 # Raspberry Pi campaign results and system backups
 /results/
+
+# Reproduction inputs stay tracked; generated captures and local config do not.
+/reproduction/runs/
+/reproduction/derived*/
+/reproduction/validation/
+/reproduction/setup/config.json
+/reproduction/**/*.pdf
+/reproduction/**/*.png
+/reproduction/*.tar.gz

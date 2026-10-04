@@ -196,6 +196,15 @@ def main() -> None:
             "--v4l2-diagnostics"
         ),
     )
+    parser.add_argument(
+        "--host-latency-kernel-trace",
+        action="store_true",
+        help=(
+            "record only the xHCI activation, URB/UVC completion, and "
+            "application metadata needed for host receive-to-frameset "
+            "latency; does not enable LiME or V4L2 diagnostic recording"
+        ),
+    )
     parser.add_argument("--no-sudo", action="store_true")
     parser.add_argument(
         "--backend",
@@ -616,7 +625,7 @@ def main() -> None:
         cases=cases,
         build_dir=args.build_dir,
         lime=args.lime,
-        use_lime=not args.no_lime,
+        use_lime=not args.no_lime and not args.host_latency_kernel_trace,
         v4l2_diagnostics=(
             args.v4l2_diagnostics
             or args.freshness_kernel_trace
@@ -625,6 +634,7 @@ def main() -> None:
         overrun_kernel_trace=args.overrun_kernel_trace,
         freshness_kernel_trace=args.freshness_kernel_trace,
         full_path_kernel_trace=args.full_path_kernel_trace,
+        host_latency_kernel_trace=args.host_latency_kernel_trace,
         use_sudo=not args.no_sudo,
         backend=args.backend,
         rsusb_usb_devices=tuple(args.rsusb_usb_devices),

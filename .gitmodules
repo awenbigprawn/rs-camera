@@ -1,12 +1,12 @@
 [submodule "deps/librealsense"]
 	path = deps/librealsense
-	url = git@github.com:awenbigprawn/librealsense.git
+	url = https://github.com/awenbigprawn/librealsense.git
 [submodule "deps/lime-rtw"]
 	path = deps/lime-rtw
-	url = git@github.com:LiME-org/lime-rtw.git
+	url = https://github.com/LiME-org/lime-rtw.git
 [submodule "deps/benchkit"]
 	path = deps/benchkit
-	url = git@github.com:open-s4c/benchkit.git
+	url = https://github.com/open-s4c/benchkit.git
 [submodule "deps/ncnn"]
 	path = deps/ncnn
 	url = https://github.com/Tencent/ncnn.git

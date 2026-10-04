@@ -3,6 +3,28 @@
 C++ workloads and Python benchmark tooling for characterizing librealsense timing
 on Intel RealSense cameras.
 
+For paper artifact evaluation, start with the [reproduction guide](reproduction/README.md),
+then follow [Raspberry Pi setup](reproduction/setup/README.md) and the linked E1–E4 experiments.
+
+Dependency versions and verification commands are documented in
+[dependencies/README.md](dependencies/README.md). For a Python-only install,
+run `sh scripts/install_python.sh`; the Pi reproduction installer also enforces
+the recorded Ubuntu 24.04 ARM64 package versions.
+
+## Two reproduction levels
+
+```sh
+./reproduce.sh raw      # Archived raw-data package -> paper CSVs and figures
+./reproduce.sh full     # Prepared Pi -> all captures, automatic reboots, analysis and figures
+./reproduce.sh plan     # Inspect the phase sequence without changing the system
+```
+
+`full` requires the [Pi setup](reproduction/setup/README.md) and requests sudo;
+it runs across reboots as a systemd service. `raw` needs no hardware or sudo.
+Both generate PDFs by default; use `--no-pdf` for CSV and TeX only.
+See [the two-level guide](reproduction/README.md) for inputs, output locations,
+progress, failure handling and per-experiment instructions.
+
 ## Repository layout
 
 - src/: every librealsense test executable, including the reusable D435 startup
@@ -193,3 +215,8 @@ destruction and the join gate.
 The exact thread shape depends on the librealsense backend. Native V4L2 and
 RSUSB/libusb builds must be treated as separate experimental configurations.
 A plain D435 has no IMU; D435i motion/HID threads are a different workload.
+
+## Paper reproduction
+
+See [reproduction/README.md](reproduction/README.md) for the four paper experiments,
+archive analysis, matching figures, and Raspberry Pi setup.

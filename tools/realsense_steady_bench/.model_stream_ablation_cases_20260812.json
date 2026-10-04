@@ -1,0 +1,71 @@
+{
+  "description": "Controlled 60-FPS single-D435 stream-composition ablation for the workload resource model.",
+  "cases": [
+    {
+      "case_id": "model_ablation_d435_n1_depth60",
+      "workload": {
+        "class": "model_stream_ablation_depth",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "disabled",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 1,
+        "camera_models": "D435",
+        "hub_label": "direct_selected_d435_idle_d435_and_d455_on_powered_hub",
+        "root_hub_label": "selected_camera_on_one_xhci_controller",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": ["327122075717"],
+        "stream_mode": "depth",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 600,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      }
+    },
+    {
+      "case_id": "model_ablation_d435_n1_depth_color60",
+      "workload": {
+        "class": "model_stream_ablation_depth_color",
+        "measurement_seconds": 30,
+        "depth": "848x480_Z16_60fps",
+        "color": "960x540_RGB8_60fps",
+        "infrared": "disabled"
+      },
+      "physical": {
+        "camera_count": 1,
+        "camera_models": "D435",
+        "hub_label": "direct_selected_d435_idle_d435_and_d455_on_powered_hub",
+        "root_hub_label": "selected_camera_on_one_xhci_controller",
+        "usb_speed_label": "usb3_superspeed"
+      },
+      "probe": {
+        "camera_count": 1,
+        "serials": ["327122075717"],
+        "stream_mode": "depth_color",
+        "delivery": "wait",
+        "frames": 1800,
+        "measurement_duration_ms": 30000,
+        "warmup_frames": 600,
+        "frame_timeout_ms": 1500,
+        "startup_timeout_ms": 15000,
+        "fps": 60,
+        "depth_width": 848,
+        "depth_height": 480,
+        "color_width": 960,
+        "color_height": 540
+      }
+    }
+  ]
+}

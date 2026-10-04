@@ -64,7 +64,7 @@ def validate_trace_environment(*, lime: Path, use_lime: bool) -> None:
     if use_lime and not lime.is_file():
         raise RuntimeError(
             f"LiME executable not found at {lime}. Build the unmodified dependency "
-            "with: cargo build --release --manifest-path deps/lime-rtw/Cargo.toml"
+            "with: sh scripts/build_lime.sh"
         )
     if shutil.which("chrt") is None:
         raise RuntimeError("chrt is required (normally provided by util-linux)")

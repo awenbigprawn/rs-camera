@@ -27,7 +27,7 @@ if [ ! -d "$LIME_REPO_PATH" ]; then
 fi
 
 if [ ! -x "$LIME_PATH" ]; then
-  (cd "$LIME_REPO_PATH" && cargo build --release)
+  sh "$GIT_ROOT/scripts/build_lime.sh" "$LIME_REPO_PATH"
 fi
 
 if [ ! -x "$LIME_PATH" ]; then

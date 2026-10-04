@@ -47,6 +47,7 @@ struct options
     bool strict_streams = false;
     bool list_only = false;
     bool device_present = false;
+    bool list_devices = false;
 };
 
 struct thread_info
@@ -210,6 +211,50 @@ void print_scheduler()
 std::string info_or_unknown(const rs2::device &dev, rs2_camera_info info)
 {
     return dev.supports(info) ? dev.get_info(info) : "unknown";
+}
+
+// Inventory mode does not start a pipeline or reset any camera.
+void list_devices()
+{
+    rs2::context context;
+    std::cout << "{\"devices\":[";
+    bool first_device = true;
+    for (auto device : context.query_devices())
+    {
+        if (!first_device) std::cout << ',';
+        first_device = false;
+        std::cout << '{';
+        bool first_field = true;
+        for (const auto &field : std::vector<std::pair<const char *, rs2_camera_info>>{
+                 {"name", RS2_CAMERA_INFO_NAME}, {"serial", RS2_CAMERA_INFO_SERIAL_NUMBER},
+                 {"firmware", RS2_CAMERA_INFO_FIRMWARE_VERSION},
+                 {"physical_port", RS2_CAMERA_INFO_PHYSICAL_PORT},
+                 {"product_id", RS2_CAMERA_INFO_PRODUCT_ID},
+                 {"usb_type", RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR}})
+        {
+            if (!first_field) std::cout << ',';
+            first_field = false;
+            std::cout << '"' << field.first << "\":\""
+                      << json_escape(info_or_unknown(device, field.second)) << '"';
+        }
+        std::cout << ",\"profiles\":[";
+        bool first_profile = true;
+        for (auto sensor : device.query_sensors())
+            for (auto profile : sensor.get_stream_profiles())
+            {
+                if (!first_profile) std::cout << ',';
+                first_profile = false;
+                std::cout << "{\"stream\":\"" << rs2_stream_to_string(profile.stream_type())
+                          << "\",\"index\":" << profile.stream_index()
+                          << ",\"format\":\"" << rs2_format_to_string(profile.format())
+                          << "\",\"fps\":" << profile.fps();
+                if (auto video = profile.as<rs2::video_stream_profile>())
+                    std::cout << ",\"width\":" << video.width() << ",\"height\":" << video.height();
+                std::cout << '}';
+            }
+        std::cout << "]}";
+    }
+    std::cout << "]}\n";
 }
 
 rs2::device select_device(rs2::context &ctx, const std::string &serial)
@@ -461,6 +506,8 @@ options parse_args(int argc, char **argv)
             opts.strict_streams = true;
         else if (arg == "--list-only")
             opts.list_only = true;
+        else if (arg == "--list-devices")
+            opts.list_devices = true;
         else if (arg == "--device-present")
             opts.device_present = true;
         else if (arg == "--help" || arg == "-h")
@@ -478,6 +525,7 @@ options parse_args(int argc, char **argv)
                 << "  --enable-all             use config.enable_all_streams()\n"
                 << "  --single-ir              request only the first infrared stream\n"
                 << "  --strict-streams         fail instead of retrying with one infrared stream\n"
+                << "  --list-devices           JSON inventory of all cameras and supported profiles; no streaming\n"
                 << "  --list-only              print selected profiles without streaming\n"
                 << "  --device-present          only verify that the selected serial is visible\n";
             std::exit(0);
@@ -506,6 +554,11 @@ try
     std::signal(SIGTERM, on_signal);
 
     const auto opts = parse_args(argc, argv);
+    if (opts.list_devices)
+    {
+        list_devices();
+        return 0;
+    }
     if (opts.hardware_reset)
     {
         hardware_reset_and_wait(opts.serial, opts.reset_timeout_ms);

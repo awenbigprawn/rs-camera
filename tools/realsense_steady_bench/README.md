@@ -159,6 +159,31 @@ use 848x480 depth and two infrared streams.  The run keeps 30 warm-up
 framesets but validates freshness over the final ten, allowing startup
 transients to settle before policy installation and measurement.
 
+Benchkit campaigns enable the same recorder with
+`--full-path-kernel-trace`. The option implies full V4L2 diagnostics and
+retains `kernel_trace.dat`, `kernel_trace_tasks.csv`,
+`full_receive_path_summary.json`, the LiME scheduler trace, pthread lifecycle
+records, and raw frame events for every attempt. New C1/H1 and receive-path
+paper experiments must pass this option explicitly. It remains opt-in rather
+than a global default because the fixed-offset kprobes are supported only by
+the archived Raspberry Pi kernels and because full tracing is itself an
+instrumented experimental condition.
+
+Example Benchkit campaign fragment:
+
+```sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config CASES.json \
+  --case CASE_ID \
+  --policies fifo-rm \
+  --scheduler-profile PROFILE.csv \
+  --full-path-kernel-trace \
+  --measurement-duration-seconds 30 \
+  --nb-runs 3 \
+  --serial SERIAL \
+  --results-dir OUTPUT_DIR
+```
+
 Run one camera after generating a matching rate-monotonic profile:
 
 ```sh
@@ -174,14 +199,52 @@ warm-up, and restores the IRQ priority and CPU-frequency state during cleanup.
 The resulting `full_receive_path_summary.json` separates frame age, kernel
 stage wall times, userspace stage times, and the final queue handoff.  UVC
 frame-assembly time includes waiting between URBs and is not CPU execution
-time.  Full tracing is intrusive and should not be used as an uninstrumented
-performance baseline.
+time.  Its primary latency metric is `host_receive_to_frameset_latency`: the
+interval from the xHCI service activation that processes the earliest
+selected input's first accepted URB to the corresponding
+`wait_for_frames()` return.  A threaded-IRQ run uses `sched_wakeup` as the
+activation boundary, while a hard-IRQ run uses `irq_handler_entry`.
+`backend_to_return` remains only an intermediate correlation value and must
+not be reported as the paper's latency.  Full tracing is intrusive and should
+not be used as an uninstrumented performance baseline.
 
 Do not enable `--overrun-kernel-trace` in the same run: both options own one
 `trace-cmd` session. If the low-volume trace identifies unexplained loss before
 UVC frame completion, use a separate short xHCI flight-recorder run. Recording
 every successful isochronous URB for ten minutes is intentionally avoided
 because its volume and overhead can perturb the camera workload.
+
+### Latency-only receive trace
+
+Use `--host-latency-kernel-trace` when a confirmatory campaign needs host
+receive-to-frameset latency without the full diagnostic event stream. This
+mode records only xHCI IRQ activation, HCD/UVC completion, and UVC video-buffer
+completion. It correlates those events with the probe's existing
+`frame_events.csv` and writes `host_receive_latency_summary.json` plus one row
+per matched delivery in `host_receive_latency_frames.csv`. LiME and the V4L2
+diagnostic marker stream remain disabled, so this mode does not allocate the
+full userspace diagnostic ring or retain scheduler execution traces.
+
+For a threaded xHCI IRQ, latency begins at the `sched_wakeup` associated with
+the activation that accepts the selected frame's first UVC payload. For a hard
+IRQ, it begins at `irq_handler_entry`. Both end at the corresponding
+`wait_for_frames()` return. Multi-camera output is grouped by camera index,
+serial number, and delivery number. On the Raspberry Pi setup, the analyzer
+also uses the camera's xHCI IRQ to avoid cross-controller matches.
+
+```sh
+.venv/bin/python tools/realsense_steady_bench/run_steady_campaign.py \
+  --config CASES.json --case CASE_ID \
+  --policies fifo-rm --scheduler-profile PROFILE.csv \
+  --host-latency-kernel-trace \
+  --measurement-duration-seconds 30 --nb-runs 1 \
+  --serial SERIAL_1 --serial SERIAL_2 \
+  --results-dir OUTPUT_DIR
+```
+
+This option is mutually exclusive with the full-path, freshness, and
+Deadline-overrun kernel trace modes. Its fixed-offset UVC kprobe has the same
+Raspberry Pi Linux 6.12.96 kernel restriction as the full-path recorder.
 
 ## Probe Modes
 
@@ -793,6 +856,43 @@ Repeat `--rsusb-usb-device` once per selected serial, in the same order as the
 calibration default, so use a recovery window of at least 5 seconds. The
 campaign restores each `uvcvideo` binding during cleanup, including
 interruption and failure paths.
+
+## Experimental UVC kworker policy monitor
+
+`uvc_worker_fifo_monitor` is a diagnostic controller for separating xHCI IRQ
+delay from deferred `uvcvideo` workqueue delay. Its eBPF program attaches to
+`uvc_video_copy_data_work` and reports the TID of each kworker that actually
+executes UVC copy work. The userspace controller temporarily changes each
+reported worker to `SCHED_FIFO` (the default) or `SCHED_RR`, records the
+original and target policies, and restores the original policy on normal exit
+or `SIGINT`/`SIGTERM`.  The `keep` policy observes the same hook without
+changing worker scheduling, which provides a matched instrumentation control.
+
+Build and run it as root on a BTF-enabled kernel with Clang and `libbpf-dev`:
+
+```sh
+tools/realsense_steady_bench/build_uvc_worker_fifo_monitor.sh \
+  /tmp/rs-uvc-worker-monitor-build
+
+sudo /tmp/rs-uvc-worker-monitor-build/uvc_worker_fifo_monitor \
+  --bpf-object \
+    /tmp/rs-uvc-worker-monitor-build/uvc_worker_fifo_monitor.bpf.o \
+  --policy fifo \
+  --priority 89 \
+  --duration 40 \
+  --log uvc_worker_policy.jsonl
+```
+
+Use `--policy rr --priority 89` for an RR treatment and `--policy keep` for an
+observe-only treatment.  The historical binary name is retained so existing
+H1 scripts remain reproducible.
+
+Start the monitor during camera warmup so the relevant workers are identified
+before the measured interference begins. This is a controlled diagnostic, not
+a deployment mechanism. Linux unbound kworkers are shared and may later
+execute unrelated work, so changing the whole worker to a real-time policy can
+also promote non-UVC work. A production implementation would give the UVC copy
+path a dedicated worker or kthread with an explicit scheduling policy.
 
 ## Result Layout
 

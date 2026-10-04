@@ -13,6 +13,8 @@ SYSTEM_ONLY=0
 SKIP_APT_UPDATE=0
 RSUSB_BACKEND=OFF
 GPU_NOISE=0
+LOCKED_SYSTEM=0
+V4L2_DIAGNOSTICS=OFF
 BUILD_JOBS="${BUILD_JOBS:-}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-realsense-thread-trace}"
 VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
@@ -30,6 +32,8 @@ Options:
   --rsusb-backend         Build vendored librealsense with its libusb backend.
   --gpu-noise             Install Vulkan packages and build MobileNetV2 GPU noise.
   --build-jobs N          Parallel build jobs (default: online CPUs minus one).
+  --locked-system         Require the paper Ubuntu 24.04 ARM64 package versions.
+  --v4l2-diagnostics      Build the paper SDK diagnostic markers.
   --system-only           Install system packages and Rust; skip project setup.
   --skip-apt-update       Do not run apt-get update.
   -h, --help              Show this help.
@@ -148,6 +152,14 @@ while [ "$#" -gt 0 ]; do
             BUILD_JOBS=$2
             shift 2
             ;;
+        --locked-system)
+            LOCKED_SYSTEM=1
+            shift
+            ;;
+        --v4l2-diagnostics)
+            V4L2_DIAGNOSTICS=ON
+            shift
+            ;;
         --system-only)
             SYSTEM_ONLY=1
             shift
@@ -197,6 +209,12 @@ case "${ID:-}" in
         ;;
 esac
 
+if [ "$LOCKED_SYSTEM" -eq 1 ]; then
+    [ "${ID:-}" = ubuntu ] && [ "${VERSION_ID:-}" = 24.04 ] && \
+        [ "$(dpkg --print-architecture)" = arm64 ] || \
+        die "--locked-system requires the paper Ubuntu 24.04 ARM64 platform"
+fi
+
 command -v sudo >/dev/null 2>&1 || die "sudo is required"
 ensure_ubuntu_updates_source
 
@@ -233,6 +251,10 @@ vulkan-tools
 "
 fi
 
+if [ "$LOCKED_SYSTEM" -eq 1 ]; then
+    APT_PACKAGES=$(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$REPO_ROOT/dependencies/ubuntu-24.04-arm64.txt")
+fi
+
 if [ "$SKIP_APT_UPDATE" -eq 0 ]; then
     sudo apt-get update
 fi
@@ -241,13 +263,11 @@ fi
 # shellcheck disable=SC2086
 sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_PACKAGES
 
-# Ubuntu 24.04 offers rustc/cargo 1.75, which is too old for Cargo.lock v4.
-# rustup installs a current toolchain for the invoking user on every supported
-# architecture instead of mixing the benchmark with an old distribution Cargo.
-rustup set profile minimal
-rustup toolchain install stable
-rustup default stable
-rustup component add rustfmt --toolchain stable
+# Install the recorded toolchain without changing the user's global default.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$REPO_ROOT/rust-toolchain.toml")
+[ -n "$RUSTUP_TOOLCHAIN" ] || die "missing Rust toolchain lock"
+export RUSTUP_TOOLCHAIN
+rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
 export PATH="$HOME/.cargo/bin:$PATH"
 
 command -v cargo >/dev/null 2>&1 || die "cargo is unavailable after rustup setup"
@@ -272,24 +292,24 @@ if [ "$SYSTEM_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-[ -d "$REPO_ROOT/.git" ] || die "$REPO_ROOT is not a Git worktree"
-git -C "$REPO_ROOT" submodule update --init --recursive
+[ -e "$REPO_ROOT/.git" ] || die "$REPO_ROOT is not a Git worktree"
+sh "$REPO_ROOT/scripts/update_deps.sh"
 
-if [ ! -x "$VENV_DIR/bin/python" ]; then
-    python3 -m venv "$VENV_DIR"
+VENV_DIR="$VENV_DIR" sh "$REPO_ROOT/scripts/install_python.sh"
+if [ "$LOCKED_SYSTEM" -eq 1 ]; then
+    "$VENV_DIR/bin/python" "$REPO_ROOT/scripts/check_dependencies.py" --system --rust
 fi
-"$VENV_DIR/bin/python" -m pip install -e "$REPO_ROOT/deps/benchkit" numpy
 
 echo "Project Python environment is ready: $VENV_DIR"
 
 if [ "$BUILD_PROJECT" -eq 1 ]; then
-    cargo build \
-        --release \
-        --manifest-path "$REPO_ROOT/deps/lime-rtw/Cargo.toml"
+    sh "$REPO_ROOT/scripts/build_lime.sh"
 
     cmake \
         -S "$REPO_ROOT" \
         -B "$BUILD_DIR" \
+        -DRS_CAMERA_USE_SYSTEM_LIBREALSENSE=OFF \
+        -DRS_CAMERA_V4L2_DIAGNOSTICS="$V4L2_DIAGNOSTICS" \
         -DFORCE_RSUSB_BACKEND="$RSUSB_BACKEND" \
         -DRS_CAMERA_BUILD_GPU_NOISE="$(if [ "$GPU_NOISE" -eq 1 ]; then printf ON; else printf OFF; fi)" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo

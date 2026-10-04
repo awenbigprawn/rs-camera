@@ -34,6 +34,12 @@ remove_probe()
 
 cleanup_probes()
 {
+    # A trace-cmd output-finalization failure can leave the dynamic probes
+    # enabled.  Disable the group first so every probe can be removed before
+    # the next logical run registers the same names.
+    if [ -e "$tracefs/events/$probe_group/enable" ]; then
+        echo 0 > "$tracefs/events/$probe_group/enable" 2>/dev/null || true
+    fi
     remove_probe usb_bh_begin
     remove_probe usb_bh_end
     remove_probe hcd_giveback
@@ -95,7 +101,7 @@ sampler_pid=$!
 trace-cmd record \
     -C mono \
     -M f \
-    -m 16384 \
+    -b 65536 \
     -o "$output" \
     -e "$probe_group" \
     -e irq:irq_handler_entry \
@@ -103,13 +109,10 @@ trace-cmd record \
     -e irq:softirq_raise -f 'vec == 0' \
     -e irq:softirq_entry -f 'vec == 0' \
     -e irq:softirq_exit -f 'vec == 0' \
-    -e workqueue:workqueue_queue_work \
-    -e workqueue:workqueue_execute_start \
-    -e workqueue:workqueue_execute_end \
     -e sched:sched_switch \
-        -f 'prev_comm ~ "kworker/u*" || next_comm ~ "kworker/u*" || prev_comm ~ "irq/*xhci*" || next_comm ~ "irq/*xhci*" || prev_comm ~ "ksoftirqd/*" || next_comm ~ "ksoftirqd/*" || prev_comm ~ "realsense*" || next_comm ~ "realsense*" || prev_comm ~ "rs-wait-*" || next_comm ~ "rs-wait-*"' \
+        -f 'prev_comm ~ "irq/*xhci*" || next_comm ~ "irq/*xhci*" || prev_comm ~ "realsense*" || next_comm ~ "realsense*" || prev_comm ~ "rs-wait-*" || next_comm ~ "rs-wait-*"' \
     -e sched:sched_wakeup \
-        -f 'comm ~ "kworker/u*" || comm ~ "irq/*xhci*" || comm ~ "ksoftirqd/*" || comm ~ "realsense*" || comm ~ "rs-wait-*"' \
+        -f 'comm ~ "irq/*xhci*" || comm ~ "realsense*" || comm ~ "rs-wait-*"' \
     -e vb2:vb2_buf_done \
     -e vb2:vb2_dqbuf \
     -e vb2:vb2_qbuf \

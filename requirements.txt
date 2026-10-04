@@ -1,0 +1,8 @@
+# Runtime environment observed on the paper Pi; Python 3.12 is required.
+# Benchkit is installed separately from its locked submodule, without resolution.
+docopt==0.6.2
+markdown-it-py==4.2.0
+mdurl==0.1.2
+numpy==2.5.1
+Pygments==2.20.0
+rich==14.2.0

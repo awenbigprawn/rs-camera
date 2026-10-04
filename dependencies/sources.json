@@ -1,0 +1,6 @@
+{
+  "deps/benchkit": "2769b5cab6f75c89d96c57c1438b26a76c1b4202",
+  "deps/librealsense": "ffbe2d5bb82576767742683cd00bee76370d21f3",
+  "deps/lime-rtw": "7263b7d66343724f74c6871838b3e456fb1b09da",
+  "deps/ncnn": "e54f7b1f88434e1d844ea0551b880a1cfb079ce1"
+}
