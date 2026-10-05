@@ -22,6 +22,11 @@ the recorded Ubuntu 24.04 ARM64 package versions.
 `full` requires the [Pi setup](reproduction/setup/README.md) and requests sudo;
 it runs across reboots as a systemd service. `raw` needs no hardware or sudo.
 Both generate PDFs by default; use `--no-pdf` for CSV and TeX only.
+Before `raw` or `full`, the entry point checks the existing Python environment.
+It reuses a valid environment, or calls `scripts/install_python.sh` to create
+or repair it. The default is `.venv`; set `VENV_DIR` to use another location.
+Python 3.12, venv support and initialized pinned submodules are prerequisites.
+Help, `plan`, `status`, `stop` and `resume` do not trigger installation.
 See [the two-level guide](reproduction/README.md) for inputs, output locations,
 progress, failure handling and per-experiment instructions.
 

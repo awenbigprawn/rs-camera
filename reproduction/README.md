@@ -13,7 +13,13 @@ To check a prepared Pi first, use the [3-second smoke test](#quick-smoke-test).
 
 ## Level 1: raw data to paper results
 
-Prepare the Python environment described in [step 2](#2-verify-the-software-or-reconstruct-archived-results).
+Install Python 3.12 with venv support and initialize the pinned submodules as
+described in [step 2](#2-verify-the-software-or-reconstruct-archived-results).
+For `raw` and `full`, `reproduce.sh` checks `.venv` (or `VENV_DIR`) against the
+Python runtime and build-tool locks. A valid environment is reused without
+installation; a missing or mismatched environment is prepared using
+`scripts/install_python.sh`. Installation failures stop the entry point.
+Help, `plan`, `status`, `stop` and `resume` do not install or modify dependencies.
 For PDF output, install `texlive-latex-extra texlive-pictures`, then run:
 
 ```sh
