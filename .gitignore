@@ -88,6 +88,11 @@ __pycache__/
 # Paper manuscript maintained as an independent Git repository
 /paperwriting/
 
+# Local archives and private research/review material
+/archive/
+/docu/reviewer/
+/docu/p1_cross_layer_matrix_v2.md
+
 # Keep local Chinese research notes while tracking English documentation.
 # Chinese source documents in docu/ must use the *_cn.md suffix.
 /docu/*_cn.md
