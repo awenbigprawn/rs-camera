@@ -104,7 +104,7 @@ def overhead_table(template, derived, age, checks):
 def patterns(raw):
     counts = Counter()
     sources = []
-    root = raw / 'results/rpi5/d1_h1_single_d435_20260819/formal/d1-uvc5-standard-hardirq'
+    root = raw / 'results/e2_uvc_pool/formal/d1-uvc5-standard-hardirq'
     markers = sorted(root.glob('**/run-*/selected_attempt.txt'))
     if len(markers) != 6:
         raise ValueError('Expected six accepted URB5 runs')

@@ -2,6 +2,26 @@
 
 # rs-camera
 
+## Paper metadata reproduction (data branch)
+
+From the repository root, generate the paper's analysis CSVs, tables, and PDF
+figures from the metadata bundled on this branch:
+
+```sh
+python3 data/reproduce.py --pdf --output data/generated-pdf
+```
+
+Use Python 3.12 or newer and install the TeX Live dependencies described in the
+[one-command guide](data/README.md#generate-csv-tables-and-pdf-figures).
+The command verifies and extracts the metadata, reuses a verified extraction,
+and runs 46 comparisons against the paper. Analysis CSVs are written to
+`data/generated-pdf/derived/`; LaTeX sources and 11 standalone PDFs are written
+to `data/generated-pdf/paper/`. No camera or Raspberry Pi is required.
+Omit `--pdf` to generate CSVs and LaTeX without TeX Live. For another run, choose
+a new or empty `--output` directory.
+
+## Camera acquisition and hardware reproduction
+
 C++ workloads and Python benchmark tooling for characterizing librealsense timing
 on Intel RealSense cameras.
 

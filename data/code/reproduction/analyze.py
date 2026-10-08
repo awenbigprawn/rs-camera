@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export paper metrics from accepted runs, without overwriting source data.
 
-Use --archive for the original rs-camera/results tree or paper_used_raw_data.
+Use --archive for the paper metadata package with experiment-named directories.
 Without --archive, --input is a reproduce.py output directory.
 """
 from analysis_common import *
@@ -24,15 +24,14 @@ def main():
     artifacts=set()
     if args.archive:
         results=source/'results' if (source/'results').is_dir() else source
-        base=results/'rpi5'
-        roots={'e1':base/'c1_full_receive_path_20260819', 'e2':base/'d1_h1_single_d435_20260819',
-               'e3':base/'h1_replacement_targeted_starvation_20260819',
-               'e4-representative':base/'p1_host_latency_representative_20260820',
-               'e4-stress':base/'p1_host_latency_supplement_20260820',
-               'overhead':base/'diagnostic_overhead_current_20260817',
-               'startup':base/'startup_linux612_uvc16_20260811/standard',
-               'ablation':base/'model_stream_ablation_20260812',
-               'diagnosis':results/'freshness_path_diagnostics/freshness_validation_other_10min_v1'}
+        roots={'e1':results/'e1_worker_timing', 'e2':results/'e2_uvc_pool',
+               'e3':results/'e3_kernel_path_protection',
+               'e4-representative':results/'e4_scheduling_30fps',
+               'e4-stress':results/'e4_scheduling_60fps',
+               'overhead':results/'supp_instrumentation_overhead',
+               'startup':results/'e1_startup_worker_map/standard',
+               'ablation':results/'e1_stream_ablation',
+               'diagnosis':results/'e2_incomplete_frame_diagnostics'}
     else: roots={key:source/key for key in ['startup','ablation','e1','e2','e3','e4-representative','e4-stress','overhead','diagnosis']}
 
     groups = {

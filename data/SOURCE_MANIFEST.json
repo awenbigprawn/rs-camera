@@ -5,7 +5,9 @@
     {
       "path": "code/reproduction/analyze.py",
       "origin": "rs-camera/reproduction/analyze.py",
-      "sha256": "92de2322fbb06452e8cb4e72fab4655eeb647c5fe42922c84737770b4e359e3b"
+      "sha256": "61a65cb9d276cda414e14ba9ad9db103bae347799136ed11b70ff51ee29cb3fc",
+      "source_sha256": "92de2322fbb06452e8cb4e72fab4655eeb647c5fe42922c84737770b4e359e3b",
+      "adaptation": "Archive directory lookup uses paper-oriented metadata directory names; analysis calculations are unchanged."
     },
     {
       "path": "code/reproduction/analysis_common.py",
