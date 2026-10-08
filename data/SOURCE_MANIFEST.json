@@ -1,0 +1,187 @@
+{
+  "rs_camera_commit": "befeeca9c5c21eb21068553bab2542313a9b448b",
+  "manuscript_commit": "7de48793b3147733d8c6e64b1d535fc26be95d27",
+  "files": [
+    {
+      "path": "code/reproduction/analyze.py",
+      "origin": "rs-camera/reproduction/analyze.py",
+      "sha256": "92de2322fbb06452e8cb4e72fab4655eeb647c5fe42922c84737770b4e359e3b"
+    },
+    {
+      "path": "code/reproduction/analysis_common.py",
+      "origin": "rs-camera/reproduction/analysis_common.py",
+      "sha256": "81411f503fe8bbbe4c7c3f53b5b20767101b5d7b94574856e37d90a5ce471e10"
+    },
+    {
+      "path": "code/reproduction/paper_metrics.py",
+      "origin": "rs-camera/reproduction/paper_metrics.py",
+      "sha256": "b95d6d2754507905a4c5d5e66e1be53dfcec050da54d9e8d0d048f11eac1065c"
+    },
+    {
+      "path": "code/tools/realsense_steady_bench/generate_deadline_profile.py",
+      "origin": "rs-camera/tools/realsense_steady_bench/generate_deadline_profile.py",
+      "sha256": "0cf13522c602fad682e818ed0121db485dedc5bd36e6185ee364943712ae1c3b"
+    },
+    {
+      "path": "code/tools/realsense_steady_bench/parse_steady_trace.py",
+      "origin": "rs-camera/tools/realsense_steady_bench/parse_steady_trace.py",
+      "sha256": "1369d81f19072307d27af06e17e2a68e3fb8369f38a4d14e244d56f40eef69e9"
+    },
+    {
+      "path": "code/tools/realsense_startup_bench/build_startup_model.py",
+      "origin": "rs-camera/tools/realsense_startup_bench/build_startup_model.py",
+      "sha256": "f3646b77aa703f6c274aad4608cd63ea9a3cdee4a2bc4c0b847fa165f6b6f640"
+    },
+    {
+      "path": "code/tools/realsense_startup_bench/parse_startup_trace.py",
+      "origin": "rs-camera/tools/realsense_startup_bench/parse_startup_trace.py",
+      "sha256": "187f36e9696cdc0c1566c5bf3a3498d2187b421b3be65ca5c1fb6fccc8d2eb77"
+    },
+    {
+      "path": "code/tools/realsense_bench_common/artifacts.py",
+      "origin": "rs-camera/tools/realsense_bench_common/artifacts.py",
+      "sha256": "c5667c44cfaeb87f58d9c120fdb8291e6928a190295dbcc6b0923e69b8a3bf85"
+    },
+    {
+      "path": "code/tools/realsense_bench_common/__init__.py",
+      "origin": "rs-camera/tools/realsense_bench_common/__init__.py",
+      "sha256": "245db041ea557fc8e33d383204596f9a5711ed98aa93f8553d6e22b39870ffb9"
+    },
+    {
+      "path": "code/LICENSE",
+      "origin": "rs-camera/LICENSE",
+      "sha256": "0edbf670280565572e7c234fdb2f79a9e5a1cfb5e26965fbc8136cc9e3239450"
+    },
+    {
+      "path": "code/reproduction/e1_workers/analyze.py",
+      "origin": "rs-camera/reproduction/e1_workers/analyze.py",
+      "sha256": "23d3df76cc70e253f14381d6becf3233a1d939b1a072919d493ad2903cd3afd3"
+    },
+    {
+      "path": "code/reproduction/e1_workers/plot.py",
+      "origin": "rs-camera/reproduction/e1_workers/plot.py",
+      "sha256": "7d47592fb24835ae1047e544d14406506380e1d3784cb0917e67149b0036d98c"
+    },
+    {
+      "path": "code/reproduction/e2_uvc_pool/analyze.py",
+      "origin": "rs-camera/reproduction/e2_uvc_pool/analyze.py",
+      "sha256": "18edddda36f59a6e7e485ecb863f313d239065d00c3617c964605e49c22cf016"
+    },
+    {
+      "path": "code/reproduction/e2_uvc_pool/plot.py",
+      "origin": "rs-camera/reproduction/e2_uvc_pool/plot.py",
+      "sha256": "9dbdc8966fc0f1ba6b270d661c60fcd8bc16bedd365f65d403cb57d18140a1d2"
+    },
+    {
+      "path": "code/reproduction/e3_kernel_path/analyze.py",
+      "origin": "rs-camera/reproduction/e3_kernel_path/analyze.py",
+      "sha256": "be54a992f69e00b835b3c4651628180ed72e1cbc83e1f33aff17b2808a633481"
+    },
+    {
+      "path": "code/reproduction/e3_kernel_path/plot.py",
+      "origin": "rs-camera/reproduction/e3_kernel_path/plot.py",
+      "sha256": "a1d2ab24e87865112894258b912ae4fd8356104ea71867cd6882f90e7bbb5cf0"
+    },
+    {
+      "path": "code/reproduction/e4_scheduling/analyze.py",
+      "origin": "rs-camera/reproduction/e4_scheduling/analyze.py",
+      "sha256": "21b53800d1a7c897f9cc5b25a78186be3a383f596355e9f6a277b8ddc42adcd1"
+    },
+    {
+      "path": "code/reproduction/e4_scheduling/plot.py",
+      "origin": "rs-camera/reproduction/e4_scheduling/plot.py",
+      "sha256": "ea84a2a05a7a72aa0e7a77cc157e017abaa542b355e14a4b8bca6a340d0996c3"
+    },
+    {
+      "path": "code/reproduction/e4_scheduling/metrics.py",
+      "origin": "rs-camera/reproduction/e4_scheduling/metrics.py",
+      "sha256": "1cdfb77b8f64e79fbbab20a83e3e437e76ddb95e1a919f9149e9656a90ee1298"
+    },
+    {
+      "path": "code/reproduction/e4_scheduling/tikz.py",
+      "origin": "rs-camera/reproduction/e4_scheduling/tikz.py",
+      "sha256": "80e64f3f361291972f4a43c4b9bc222cad967e875d1e47e1dbd7f1f386e25c63"
+    },
+    {
+      "path": "paper/figures/main-matrix-host-latency-tikz.tex",
+      "origin": "rtns26_rtrealsense/figures/main-matrix-host-latency-tikz.tex",
+      "sha256": "163a74f89a1b087d6c645e85d365c1138768aab535c15b6a3ffc4680901cfd79"
+    },
+    {
+      "path": "paper/figures/main-matrix-host-latency-max-tikz.tex",
+      "origin": "rtns26_rtrealsense/figures/main-matrix-host-latency-max-tikz.tex",
+      "sha256": "cd8c9a1646eceafe85872fb59006ecca76c368aa4b699947ff1e3bdd031adba0"
+    },
+    {
+      "path": "paper/objects/fig-linux-usb-path.tex",
+      "origin": "rtns26_rtrealsense/body/11-background.tex",
+      "label": "fig:linux-usb-path",
+      "sha256": "d08f35302bbf8c397c1f72699683ee06d5ca6a39bd6f525f04ab06b138e8233f"
+    },
+    {
+      "path": "paper/objects/fig-thread-temporal-model.tex",
+      "origin": "rtns26_rtrealsense/body/20-models.tex",
+      "label": "fig:thread-temporal-model",
+      "sha256": "a0167fc65c4c56aec779d80ccbce46c9ac3403f3e728e3ef75fce2a123be79bf"
+    },
+    {
+      "path": "paper/objects/fig-timing-notions.tex",
+      "origin": "rtns26_rtrealsense/body/20-models.tex",
+      "label": "fig:timing-notions",
+      "sha256": "cafa5e3e7da7a85ae24e304c34f39f4bb7831094db7f5c12818b88d09b743d2e"
+    },
+    {
+      "path": "paper/objects/tab-steady-model-validation.tex",
+      "origin": "rtns26_rtrealsense/body/22-evaluation.tex",
+      "label": "tab:steady-model-validation",
+      "sha256": "938c69a9ae1445f67b4e056603a5f08db13f3dac09670b92442a9a5d2a4ded85"
+    },
+    {
+      "path": "paper/objects/fig-linux-host-path-results.tex",
+      "origin": "rtns26_rtrealsense/body/22-evaluation.tex",
+      "label": "fig:linux-host-path-results",
+      "sha256": "fc3a6976ae173287f15e59910cf3ead3965c9835c0799a6fa34347920f30fed3"
+    },
+    {
+      "path": "paper/objects/fig-main-matrix.tex",
+      "origin": "rtns26_rtrealsense/body/22-evaluation.tex",
+      "label": "fig:main-matrix",
+      "sha256": "f863ac4eecbfc3ea631c64ead70cd00d520640b322df7c9aaab3b97f58f6eac3"
+    },
+    {
+      "path": "paper/objects/tab-instrumentation-overhead.tex",
+      "origin": "rtns26_rtrealsense/body/40-appendix.tex",
+      "label": "tab:instrumentation-overhead",
+      "sha256": "24284dbd93ee0161078aaf6ed34132097b9391469ded39456a163460c078b940"
+    },
+    {
+      "path": "paper/objects/tab-instrumentation-age-overhead.tex",
+      "origin": "rtns26_rtrealsense/body/40-appendix.tex",
+      "label": "tab:instrumentation-age-overhead",
+      "sha256": "26e4aab6bbe2ca275d39a0c7258064a6c617b2e63ffd9a5daa6937ad95758414"
+    },
+    {
+      "path": "paper/objects/tab-uvc-freshness-patterns.tex",
+      "origin": "rtns26_rtrealsense/body/40-appendix.tex",
+      "label": "tab:uvc-freshness-patterns",
+      "sha256": "0d851a2e7320c31001c8fe662868cbf5080d98c3ffd7e4d9044b64eb782f5c4e"
+    },
+    {
+      "path": "paper/objects/fig-main-matrix-max.tex",
+      "origin": "rtns26_rtrealsense/body/40-appendix.tex",
+      "label": "fig:main-matrix-max",
+      "sha256": "79b45ff18b280e2721a43ff04441c4815cb4cc21e0432d2a0bc7f19ba7454614"
+    },
+    {
+      "path": "paper/objects/tab-experiment-populations.tex",
+      "origin": "rtns26_rtrealsense/tables/experiment-populations.tex",
+      "label": "tab:experiment-populations",
+      "sha256": "44bca8a8eb7347beb3abc1b2aad4517d7842a1d28f5a3184fa2c6061e9e5e1b3"
+    },
+    {
+      "path": "paper/latency-sample-audit.json",
+      "origin": "paperwriting/audits/latency-filter-20261004/audit-summary.json",
+      "sha256": "d45dc070d94f238847542671a6bc84bbdd1dabecbac597ad8f45def9d5d72991"
+    }
+  ]
+}

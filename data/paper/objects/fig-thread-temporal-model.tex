@@ -1,0 +1,199 @@
+\begin{figure*}[t]
+  \centering
+  \definecolor{rsframe}{HTML}{B9DCF0}
+  \definecolor{rstimer}{HTML}{B8E2D2}
+  \definecolor{rsevent}{HTML}{F3D49A}
+  \definecolor{rssleep}{HTML}{D5D5D5}
+  \definecolor{rsprocess}{HTML}{F4F4F4}
+  \definecolor{rsdevice}{HTML}{EEF7EE}
+  \definecolor{rsdepth}{HTML}{EDF4FA}
+  \definecolor{rscolor}{HTML}{FFF1E8}
+  % Use the same scriptsize optical font as Fig.~\ref{fig:linux-usb-path},
+  % then scale the complete text box.  This retains the same glyph shape
+  % without allowing individual lines to wrap inside compact worker boxes.
+  \newcommand{\rsfigone}[1]{\scalebox{0.65}{#1}}
+  \newcommand{\rsfigtwo}[2]{\scalebox{0.65}{\shortstack{#1\\#2}}}
+  \newcommand{\rsfigsmallone}[1]{\scalebox{0.52}{#1}}
+  \newcommand{\rsfigdevtwo}[2]{\scalebox{0.46}{\shortstack{#1\\#2}}}
+  \begin{tikzpicture}[
+      x=1cm, y=1cm,
+      owner/.style={draw=black!75, fill=white, rounded corners=1pt,
+        anchor=south west, minimum width=2.05cm, minimum height=5mm,
+        text width=1.88cm, align=center, inner sep=1pt,
+        font=\scriptsize},
+      worker/.style={draw=black!75, rounded corners=1pt, anchor=south west,
+        minimum height=5mm, align=center, inner sep=1pt,
+        font=\scriptsize},
+      single/.style={minimum width=6.05cm, text width=5.80cm},
+      half/.style={minimum width=3.025cm, text width=2.78cm},
+      condition/.style={draw, fill=white, rounded corners=1pt,
+        anchor=south west, minimum width=2.68cm, minimum height=4.2mm,
+        text width=2.48cm, align=center, inner sep=1pt,
+        font=\scriptsize\bfseries},
+      d455only/.style={draw=green!45!black, dashed},
+      ownership/.style={-{Latex[length=1.7mm]}, semithick, draw=black!70},
+      lanetitle/.style={anchor=west,
+        font=\fontsize{6}{6.6}\selectfont\bfseries,
+        text=black!70}
+    ]
+
+    % Activation-class legend and measured stream-ablation summary.
+    \node[draw, fill=rsframe, minimum width=3.5mm, minimum height=2mm]
+      at (1.55,8.70) {};
+    \node[anchor=west, font=\fontsize{5.8}{6.4}\selectfont]
+      at (1.80,8.70) {frame-triggered};
+    \node[draw, fill=rstimer, minimum width=3.5mm, minimum height=2mm]
+      at (4.05,8.70) {};
+    \node[anchor=west, font=\fontsize{5.8}{6.4}\selectfont]
+      at (4.30,8.70) {timer-triggered};
+    \node[draw, fill=rsevent, minimum width=3.5mm, minimum height=2mm]
+      at (6.50,8.70) {};
+    \node[anchor=west, font=\fontsize{5.8}{6.4}\selectfont]
+      at (6.75,8.70) {event-triggered};
+    \node[draw, fill=rssleep, minimum width=3.5mm, minimum height=2mm]
+      at (9.05,8.70) {};
+    \node[anchor=west, font=\fontsize{5.8}{6.4}\selectfont]
+      at (9.30,8.70) {dormant};
+
+    \node[anchor=center, text width=11.65cm, align=center, inner sep=0pt,
+      font=\fontsize{5.7}{7.4}\selectfont\bfseries]
+      at (5.94,7.88) {Observed all-stream configuration at 60 FPS:\\
+        D435: 10 base
+        \hspace{0.35em}\textcolor{black!45}{\textbar}\hspace{0.35em}
+        \textcolor{blue!70!black}{+ Depth}
+        \hspace{0.35em}\textcolor{black!45}{\textbar}\hspace{0.35em}
+        \textcolor{orange!85!black}{+ Color}
+        \hspace{0.35em}\textcolor{black!45}{\textbar}\hspace{0.35em}
+        \textcolor{violet!75!black}{+ IR pair =13 threads}\\
+        D455: same capture map
+        \hspace{0.35em}\textcolor{black!45}{\textbar}\hspace{0.35em}
+        \textcolor{green!45!black}{+ thermal monitor =14 threads}};
+
+    % Ownership lanes.  Their fill shows ownership, independently of the
+    % activation-class fill used by the worker boxes.
+    \path[draw=gray!60, fill=rsprocess, rounded corners=1.5pt]
+      (0.05,4.62) rectangle (11.82,7.30);
+    \node[lanetitle] at (0.18,7.11)
+      {Process-wide and pipeline-owned (4 base threads)};
+    \path[draw=gray!60, fill=rsdevice, rounded corners=1.5pt]
+      (0.05,3.54) rectangle (11.82,4.48);
+    \node[lanetitle] at (0.18,4.29)
+      {D400 device services (D435: 2 base; D455: 2 base + thermal monitor)};
+    \path[draw=gray!60, fill=rsdepth, rounded corners=1.5pt]
+      (0.05,1.75) rectangle (11.82,3.40);
+    \node[lanetitle] at (0.18,3.21)
+      {Depth / infrared sensor (2 base + Depth and interleaved-IR capture)};
+    \path[draw=gray!60, fill=rscolor, rounded corners=1.5pt]
+      (0.05,0.00) rectangle (11.82,1.62);
+    \node[lanetitle] at (0.18,1.43)
+      {Color sensor (2 base + 1 capture thread)};
+
+    % Process-wide and pipeline-owned workers.
+    \node[owner] (o-main) at (0.25,6.41) {\rsfigone{Process entry}};
+    \node[worker,single,fill=rssleep] (r-main) at (2.55,6.41)
+      {\rsfigtwo{Main thread $\times1$}
+        {phase control; blocked during steady state}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,6.45)
+      {\rsfigone{base: process lifetime}};
+
+    \node[owner] (o-wait) at (0.25,5.85)
+      {\rsfigtwo{Benchmark}{application}};
+    \node[worker,single,fill=rsframe] (r-wait) at (2.55,5.85)
+      {\rsfigtwo{Application wait $\times1$}
+        {\texttt{wait\_for\_frames()}; record framesets}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,5.89)
+      {\rsfigone{base: active pipeline}};
+
+    \node[owner] (o-udev) at (0.25,5.29)
+      {\rsfigtwo{Context /}{V4L2 backend}};
+    \node[worker,single,fill=rstimer] (r-udev) at (2.55,5.29)
+      {\rsfigtwo{udev watcher $\times1$}
+        {hotplug-monitor poll every 100 ms}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,5.33)
+      {\rsfigone{base: context alive}};
+
+    \node[owner] (o-pipe) at (0.25,4.73)
+      {\rsfigone{\texttt{pipeline::start()}}};
+    \node[worker,single,fill=rsevent] (r-pipe) at (2.55,4.73)
+      {\rsfigtwo{Pipeline dispatcher $\times1$}
+        {asynchronous control queue}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,4.77)
+      {\rsfigone{base: pipeline started}};
+
+    % Device timer services.
+    \node[owner] (o-device) at (0.25,3.66) {\rsfigone{D400 device}};
+    \node[worker,minimum width=2.016cm,text width=1.78cm,fill=rstimer]
+      (r-clock) at (2.55,3.66)
+      {\rsfigdevtwo{Time-difference keeper $\times1$}
+        {device-to-host clock mapping}};
+    \node[worker,minimum width=2.016cm,text width=1.78cm,fill=rstimer,
+      right=0pt of r-clock] (r-fw)
+      {\rsfigdevtwo{Firmware-error poller $\times1$}
+        {device error query}};
+    \node[worker,minimum width=2.016cm,text width=1.78cm,fill=rstimer,
+      d455only,right=0pt of r-fw] (r-thermal)
+      {\rsfigdevtwo{Thermal monitor $\times1$}
+        {D455 only; ASIC temperature}};
+    \node[condition,draw=green!45!black,text=green!45!black] at (8.92,3.70)
+      {\rsfigtwo{D435: base $\times2$}{D455: $+1$ thermal}};
+
+    % Depth and infrared sensor workers.
+    \node[owner] (o-depth-notify) at (0.25,2.55)
+      {\rsfigtwo{Raw + synthetic}{depth sensors}};
+    \node[worker,half,fill=rsevent] (r-depth-raw) at (2.55,2.55)
+      {\rsfigtwo{Raw-depth notification $\times1$}{raw sensor queue}};
+    \node[worker,half,fill=rsevent,right=0pt of r-depth-raw] (r-depth-synth)
+      {\rsfigtwo{Synthetic-depth notification $\times1$}
+        {synthetic sensor queue}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,2.59)
+      {\rsfigsmallone{base: D400 device constructed}};
+
+    \node[owner] (o-depth-capture) at (0.25,1.89)
+      {\rsfigtwo{\texttt{multi\_pins\_uvc\_device}}
+        {\texttt{::stream\_on()}}};
+    \node[worker,half,fill=rsframe] (r-depth) at (2.55,1.89)
+      {\rsfigtwo{Depth capture (Z16) $\times1$}
+        {DQBUF; metadata; callback}};
+    \node[worker,half,fill=rsframe,right=0pt of r-depth] (r-ir)
+      {\rsfigtwo{IR capture (Y8I) $\times1$}
+        {split $\rightarrow$ IR1 Y8 + IR2 Y8}};
+    \node[condition,draw=violet!75!black,text=violet!75!black] at (8.92,1.93)
+      {\rsfigtwo{$+1$ Depth /}{$+1$ IR pair}};
+
+    % Color sensor workers.
+    \node[owner] (o-color-notify) at (0.25,0.77)
+      {\rsfigtwo{Raw + synthetic}{color sensors}};
+    \node[worker,half,fill=rsevent] (r-color-raw) at (2.55,0.77)
+      {\rsfigtwo{Raw-color notification $\times1$}{raw sensor queue}};
+    \node[worker,half,fill=rsevent,right=0pt of r-color-raw] (r-color-synth)
+      {\rsfigtwo{Synthetic-color notification $\times1$}
+        {synthetic sensor queue}};
+    \node[condition,draw=black!55,text=black!60] at (8.92,0.81)
+      {\rsfigsmallone{base: D400 device constructed}};
+
+    \node[owner] (o-color-capture) at (0.25,0.11)
+      {\rsfigtwo{\texttt{v4l\_uvc\_device}}{\texttt{::stream\_on()}}};
+    \node[worker,single,fill=rsframe] (r-color) at (2.55,0.11)
+      {\rsfigtwo{Color capture $\times1$}
+        {DQBUF; metadata; RGB8 conversion; callback}};
+    \node[condition,draw=orange!90!black,text=orange!90!black] at (8.92,0.15)
+      {\rsfigone{$+1$ if Color enabled}};
+
+    % Creation and start ownership arrows are drawn last.
+    \draw[ownership] (o-main.east) -- (r-main.west);
+    \draw[ownership] (o-wait.east) -- (r-wait.west);
+    \draw[ownership] (o-udev.east) -- (r-udev.west);
+    \draw[ownership] (o-pipe.east) -- (r-pipe.west);
+    \draw[ownership] (o-device.east) -- (r-clock.west);
+    \draw[ownership] (o-depth-notify.east) -- (r-depth-raw.west);
+    \draw[ownership] (o-depth-capture.east) -- (r-depth.west);
+    \draw[ownership] (o-color-notify.east) -- (r-color-raw.west);
+    \draw[ownership] (o-color-capture.east) -- (r-color.west);
+  \end{tikzpicture}
+  \caption{Creation and activation-class map for one D435 or D455 with Depth,
+  Color, IR1, and IR2 through V4L2.  Fill color gives the activation class;
+  solid arrows denote creation or start ownership.  Both models use the same
+  three capture workers.  The dashed box is the additional timer-triggered
+  thermal monitor on D455, giving 14 rather than 13 live threads.}
+  \label{fig:thread-temporal-model}
+\end{figure*}

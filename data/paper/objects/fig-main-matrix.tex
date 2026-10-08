@@ -1,0 +1,13 @@
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+  \input{figures/main-matrix-host-latency-tikz}%
+}
+\caption{E4 p99 host receive-to-frameset latency for two D435 cameras at 30
+and 60 FPS.  Bars are means of three per-run p99 values, dots are individual
+runs, dashed lines mark nominal frame periods, and red labels give the number
+of non-fresh frameset count (NF): deliveries with at least one reused component
+or sequence gap.  Each non-fresh frameset is counted once, and a bar without a
+label contains only fresh framesets.}
+\label{fig:main-matrix}
+\end{figure*}

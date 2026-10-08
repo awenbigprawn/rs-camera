@@ -1,0 +1,26 @@
+\begin{table*}[t]
+  \centering
+  \caption{Diagnostic resource and inter-delivery overhead for one D435.
+  Each value is the median of three 30-s runs.  CPU is a percentage of one
+  core, RSS is the maximum during the measured interval, and Max is the median
+  of the three per-run maxima.}
+  \label{tab:instrumentation-overhead}
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \resizebox{\linewidth}{!}{%
+  \begin{tabular}{@{}llrrrrrr@{}}
+    \toprule
+    Workload & Diagnostic mode & CPU (\%) & RSS (MiB) & Mean (ms) &
+      p99 (ms) & Max (ms) & Trace (MiB) \\
+    \midrule
+    Representative, 30 FPS & Off        & 4.419 & 27.9  & 33.357 & 33.423 & 33.978 & 0 \\
+                           & Build-only & 4.354 & 27.7  & 33.357 & 33.453 & 36.567 & 0 \\
+                           & Full       & 4.487 & 394.0 & 33.357 & 33.425 & 33.507 & 2.22 \\
+    \addlinespace
+    Stress, 60 FPS         & Off        & 21.317 & 46.8  & 16.799 & 16.969 & 17.681 & 0 \\
+                           & Build-only & 21.407 & 46.7  & 16.799 & 16.922 & 17.772 & 0 \\
+                           & Full       & 21.740 & 413.5 & 16.799 & 16.908 & 17.046 & 6.29 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table*}

@@ -1,3 +1,5 @@
+> **Data artifact branch:** Selected paper measurement metadata and the self-contained paper figure/table reproduction package are in [data/](data/README.md).
+
 # rs-camera
 
 C++ workloads and Python benchmark tooling for characterizing librealsense timing

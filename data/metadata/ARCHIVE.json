@@ -1,0 +1,21 @@
+{
+  "format": "gzip-compressed POSIX tar containing only selected paper metadata",
+  "measurement_files": 1083,
+  "files": 1084,
+  "measurement_bytes": 400317602,
+  "uncompressed_file_bytes": 400689775,
+  "compressed_bytes": 56086964,
+  "source_sha256sums": "d4e5e13f39e79616b2c4f775a373fa72210b18edada18f248e7551a96a261b9f",
+  "parts": [
+    {
+      "name": "measurements.tar.gz.part-000",
+      "bytes": 41943040,
+      "sha256": "b1482fc9d90d105395c93f6cdf3f7f3d925b74f62c6112068cf6e9c194069f11"
+    },
+    {
+      "name": "measurements.tar.gz.part-001",
+      "bytes": 14143924,
+      "sha256": "7a0d1d927ee016e3ff533d5ae7b3596b3c7387cd2964ceb59e714a4e81123446"
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "scope": "E4 Figure 5 / supplementary Section D: 192 runs; E3 targeted-starvation: 18 runs.",
+  "original_data_modified": false,
+  "e4": {
+    "runs": 192,
+    "total_deliveries": 515506,
+    "archived_latency_samples": 515103,
+    "negative_latency_rejections": 0,
+    "above_250ms_rejections": 0,
+    "unmatched": 403,
+    "recovered_by_extending_kernel_window_500ms": 354,
+    "recovered_with_pre_measurement_activation": 354,
+    "remaining_unmatched": 49,
+    "remaining_unmatched_return_offset_range_ms": [
+      2248.2544480000115,
+      29919.27769499989
+    ],
+    "boundary_recovery_changes_per_run_max": 0
+  },
+  "e3": {
+    "runs": 18,
+    "total_deliveries": 31055,
+    "archived_latency_samples": 31035,
+    "negative_latency_rejections": 0,
+    "above_250ms_rejections": 3,
+    "unmatched": 17,
+    "recovered_by_extending_kernel_window_500ms": 16,
+    "recovered_with_pre_measurement_activation": 16,
+    "remaining_unmatched": 1,
+    "remaining_unmatched_return_offset_range_ms": [
+      26847.787138000058,
+      26847.787138000058
+    ],
+    "boundary_recovery_changes_per_run_max": 0
+  },
+  "e4_archived_frame_csvs_reproduced_byte_for_byte": 192,
+  "e3_legacy_matching_validation": {
+    "runs_with_identical_original_csv_columns": 17,
+    "all_runs_reproduce_archived_n_p99_max": true,
+    "remaining_difference": "One delivery in E3 run 15 is 34.482991 ms in replay versus 21.541008 ms in archive; this does not affect p99/max or the included-delivery set. Other 17 runs reproduce all original CSV columns."
+  },
+  "e3_affected_runs": [
+    {
+      "run_index": 6,
+      "source": "results/rpi5/h1_replacement_targeted_starvation_20260819/camera-d435/treatment-xhci-other_uvc-other/rep-1/attempt-1/benchmark_rpi5-realsense_realsense_steady_20260819_210544_810523/case_id-d1_h1_d435_stress60/policy-fifo-rm/cpu_noise-busy_loop/memory_noise-none/gpu_noise-none/usb_storage_noise-none/run-1/attempt-1/full_receive_path_summary.json",
+      "excluded": [
+        {
+          "camera_index": 0,
+          "delivery": 1084,
+          "return_s": 13872.10942253,
+          "matched_components": 4,
+          "required_components": 4,
+          "max_backend_age_ms": 281.116211,
+          "latency_ms": 282.6504570002726,
+          "activation_s": 13871.826772073,
+          "reason": "above_250ms",
+          "return_offset_ms": 21819.706178999695
+        },
+        {
+          "camera_index": 0,
+          "delivery": 1085,
+          "return_s": 13872.109454308,
+          "matched_components": 4,
+          "required_components": 4,
+          "max_backend_age_ms": 281.147949,
+          "latency_ms": 282.68223499981104,
+          "activation_s": 13871.826772073,
+          "reason": "above_250ms",
+          "return_offset_ms": 21819.737956999234
+        },
+        {
+          "camera_index": 0,
+          "delivery": 1086,
+          "return_s": 13872.115308281,
+          "matched_components": 4,
+          "required_components": 4,
+          "max_backend_age_ms": 287.001709,
+          "latency_ms": 288.5362079996412,
+          "activation_s": 13871.826772073,
+          "reason": "above_250ms",
+          "return_offset_ms": 21825.591929999064
+        }
+      ],
+      "old_n": 1503,
+      "new_n": 1506,
+      "old_p99_ms": 131.71894385988708,
+      "new_p99_ms": 132.20390989954467,
+      "old_max_ms": 171.22424199988018,
+      "new_max_ms": 288.5362079996412
+    }
+  ],
+  "e3_cells_after_restoring_range_rejected_samples": [
+    {
+      "camera": "d435",
+      "treatment": "xhci-fifo90_uvc-fifo89",
+      "old_median_p99_ms": 17.908085119343014,
+      "new_median_p99_ms": 17.908085119343014,
+      "old_worst_max_ms": 41.923976999896695,
+      "new_worst_max_ms": 41.923976999896695
+    },
+    {
+      "camera": "d435",
+      "treatment": "xhci-fifo90_uvc-other",
+      "old_median_p99_ms": 42.45506999977806,
+      "new_median_p99_ms": 42.45506999977806,
+      "old_worst_max_ms": 60.85961499957193,
+      "new_worst_max_ms": 60.85961499957193
+    },
+    {
+      "camera": "d435",
+      "treatment": "xhci-other_uvc-other",
+      "old_median_p99_ms": 121.25643038043559,
+      "new_median_p99_ms": 121.25643038043559,
+      "old_worst_max_ms": 179.9710289997165,
+      "new_worst_max_ms": 288.5362079996412
+    },
+    {
+      "camera": "d455",
+      "treatment": "xhci-fifo90_uvc-fifo89",
+      "old_median_p99_ms": 15.368673120701715,
+      "new_median_p99_ms": 15.368673120701715,
+      "old_worst_max_ms": 78.60343099855527,
+      "new_worst_max_ms": 78.60343099855527
+    },
+    {
+      "camera": "d455",
+      "treatment": "xhci-fifo90_uvc-other",
+      "old_median_p99_ms": 43.11573802051498,
+      "new_median_p99_ms": 43.11573802051498,
+      "old_worst_max_ms": 49.05598900040786,
+      "new_worst_max_ms": 49.05598900040786
+    },
+    {
+      "camera": "d455",
+      "treatment": "xhci-other_uvc-other",
+      "old_median_p99_ms": 114.21052215933742,
+      "new_median_p99_ms": 114.21052215933742,
+      "old_worst_max_ms": 170.92554900045798,
+      "new_worst_max_ms": 170.92554900045798
+    }
+  ],
+  "interpretation": [
+    "No E4 sample was removed by the 0-250 ms check; original E4 summaries and frame CSVs are reproduced exactly.",
+    "Three E3 positive latencies above 250 ms were omitted from the archived latency CSV although their frameset returns remain in frame_events.csv.",
+    "Those E3 returns occur about 21.82 seconds into the steady-state measurement and reuse Depth frame 1375; no API timeout is recorded in that run.",
+    "All E3 cell median p99 values remain unchanged when the three samples are restored; the D435 unprotected cell maximum increases.",
+    "Unmatched returns were not removed from raw frame/freshness records. Most missing latency associations cross the measurement boundary; some are interior association failures.",
+    "SDK missing-stream inactivity and host-path latency use different boundaries; inactivity does not imply a 250 ms upper bound on delivered-frame latency."
+  ]
+}

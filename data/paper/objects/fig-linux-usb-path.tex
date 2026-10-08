@@ -1,0 +1,59 @@
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}[
+      node distance=3.5mm,
+      stage/.style={draw, rounded corners=1.5pt, align=center,
+        minimum height=14mm, text width=1.05cm, inner sep=2pt,
+        font=\scriptsize},
+      flow/.style={-{Latex[length=2mm]}, semithick},
+      region/.style={draw=gray!65, rounded corners=2pt,
+        minimum height=20mm, inner xsep=3pt, inner ysep=3pt},
+      regionlabel/.style={font=\scriptsize\bfseries, text=black!70},
+      layerlabel/.style={font=\footnotesize\bfseries, text=black!75}
+    ]
+    \node[stage, fill=blue!9, text width=1.20cm] (camera) {D400 camera\\UVC endpoints};
+    \node[stage, fill=blue!9, text width=1.45cm, right=of camera] (xhci) {USB link\\xHCI controller\\and DMA};
+    \node[stage, fill=orange!12, right=of xhci] (irq) {xHCI IRQ\\service};
+    \node[stage, fill=orange!12, text width=1.25cm, right=of irq] (uvc) {\texttt{uvcvideo}\\async copy};
+    \node[stage, fill=orange!12, text width=0.85cm, right=of uvc] (v4l2) {V4L2\\buffer};
+    \node[stage, fill=green!11, text width=1.60cm, right=of v4l2] (sdk) {\texttt{librealsense}\\capture and sync};
+    \node[stage, fill=green!11, text width=1.45cm, right=1.5mm of sdk] (app) {Application};
+
+    \coordinate (kernel-top) at ($(irq.north)!0.5!(v4l2.north)$);
+    \coordinate (user-top) at ($(sdk.north)!0.5!(app.north)$);
+    \node[regionlabel, above=1.5mm of camera.north] (camera-label) {Camera};
+    \node[regionlabel, above=1.5mm of xhci.north] (host-label) {Host};
+    \node[regionlabel, above=1.5mm of kernel-top] (kernel-label) {Linux kernel};
+    \node[regionlabel, above=1.5mm of user-top] (user-label) {User space};
+
+    \node[region, fit=(camera)(camera-label)] (camera-box) {};
+    \node[region, fit=(xhci)(host-label)] (host-box) {};
+    \node[region, fit=(irq)(uvc)(v4l2)(kernel-label)] (kernel-box) {};
+    \node[region, fit=(sdk)(app)(user-label)] (user-box) {};
+
+    \coordinate (hardware-center) at
+      ($(camera-box.center)!0.5!(host-box.center)$);
+    \coordinate (software-center) at
+      ($(kernel-box.center)!0.5!(user-box.center)$);
+    \coordinate (layer-label-height) at ($(camera-box.north)+(0,3.2mm)$);
+    \node[layerlabel] at (hardware-center |- layer-label-height) {Hardware};
+    \node[layerlabel] at (software-center |- layer-label-height) {Software};
+    \draw[gray!75, line width=0.8pt]
+      ($(host-box.south east)!0.5!(kernel-box.south west)+(0,-1mm)$) --
+      ($(host-box.north east)!0.5!(kernel-box.north west)+(0,5mm)$);
+
+    % Draw the data path last so that arrows remain above region borders and
+    % the hardware--software separator.
+    \draw[flow] (camera) -- (xhci);
+    \draw[flow] (xhci) -- (irq);
+    \draw[flow] (irq) -- (uvc);
+    \draw[flow] (uvc) -- (v4l2);
+    \draw[flow] (v4l2) -- (sdk);
+    \draw[flow] (sdk) -- (app);
+  \end{tikzpicture}
+  \caption{D400 receive path on Linux.  USB transfer and DMA occur in
+  hardware.  Kernel xHCI IRQ service and asynchronous UVC copy work complete
+  and assemble the data before \texttt{librealsense} capture workers and the
+  application can process it.}
+  \label{fig:linux-usb-path}
+\end{figure*}

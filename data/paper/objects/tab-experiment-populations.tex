@@ -1,0 +1,31 @@
+\begin{table*}[t]
+\caption{Principal experiment populations on Raspberry Pi~5 and
+Linux~6.12.96.  RT denotes \texttt{PREEMPT\_RT}.}
+\label{tab:experiment-populations}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.05\textwidth}
+                  >{\raggedright\arraybackslash}p{0.22\textwidth}
+                  >{\raggedright\arraybackslash}p{0.24\textwidth}
+                  >{\raggedright\arraybackslash}p{0.6\textwidth}@{}}
+\toprule
+ID & Evidence & Kernel/cameras & Design and sample size \\
+\midrule
+E1 & Worker and path calibration & RT; 1 D435, 1 D455 & 2 camera models
+$\times$ 2 calibration workloads $\times$ 3 full-path traces $=12$ runs;
+30 s each. \\
+E2 & UVC diagnosis and receive pool & non-RT; 1 D435 & 2 aligned failure
+traces; 2 workloads $\times$ 2 pool sizes $\times$ 3 repetitions $=12$ runs;
+30 s each. \\
+E3 & Kernel-predecessor scheduling & non-RT \texttt{threadirqs};
+1 D435, 1 D455 & 2 models $\times$ 3 xHCI/UVC copy treatments $\times$ 3
+repetitions $=18$ full-path stress runs; 30 s each. \\
+E4 & Main scheduling comparison & non-RT, RT; 2 D435 & 2 workloads $\times$ 4
+interference conditions $\times$ 4 treatments $\times$ 2 kernels $\times$ 3
+repetitions $=192$ runs; 30 s each. \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

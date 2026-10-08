@@ -1,0 +1,39 @@
+\begin{table*}[t]
+  \centering
+  \caption{\texttt{URB5} metadata patterns.  Unlisted streams advance without a gap.
+  A ``next'' gap appears when a stream reused at delivery $k$ catches up at
+  $k+1$.  Occurrences count the two-return reuse pattern once.}
+  \label{tab:uvc-freshness-patterns}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \resizebox{\linewidth}{!}{%
+  \renewcommand{\arraystretch}{1.35}
+  \begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.14\linewidth}
+                      >{\raggedright\arraybackslash}p{0.22\linewidth}
+                      >{\raggedright\arraybackslash}p{0.22\linewidth}
+                      >{\raggedright\arraybackslash}p{0.15\linewidth}
+                      >{\raggedright\arraybackslash}p{0.31\linewidth}@{}}
+    \toprule
+    Pattern & $u$/$g$ signature & Return state(s) & Count & Interpretation \\
+    \midrule
+    Depth-only reuse &
+    $u_{D,k}=0$\newline $g_{D,k+1}=1$ &
+    Partially stale at $k$; gap at $k+1$ &
+    2 at 30 FPS; 1 at 60 FPS &
+    No acceptable new Depth input reaches the join. \\
+    Depth \& IR reuse &
+    $u_{s,k}=0,\ \forall s\in{\cal S}_{\mathrm{st}}$\newline
+    $g_{s,k+1}=1,\ \forall s\in{\cal S}_{\mathrm{st}}$ &
+    Partially stale at $k$; gap at $k+1$ &
+    9 at 60 FPS &
+    Depth and IR1/2 inputs are unavailable while Color advances. \\
+    All-stream period skipped &
+    $u_{s,k}=1,\ \forall s\in{\cal S}$\newline
+    $g_{s,k}=1,\ \forall s\in{\cal S}$ &
+    Non-fresh (gap) at $k$ &
+    3 at 60 FPS &
+    No stale return; one complete application-visible delivery period is absent. \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table*}

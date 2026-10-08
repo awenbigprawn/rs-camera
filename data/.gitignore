@@ -1,0 +1,4 @@
+/metadata-unpacked/
+/generated*/
+__pycache__/
+*.py[cod]

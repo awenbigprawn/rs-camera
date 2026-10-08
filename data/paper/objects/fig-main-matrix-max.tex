@@ -1,0 +1,13 @@
+\begin{figure*}[!htb]
+\centering
+\resizebox{\textwidth}{!}{%
+  \input{figures/main-matrix-host-latency-max-tikz}%
+}
+\caption{E4 maximum observed host receive-to-frameset latency for two D435
+cameras at 30 and 60 FPS.  Each bar is the maximum across three 30-s runs;
+dots show each run's maximum.  Dashed lines mark nominal frame periods.
+Red labels give the total non-fresh frameset count (NF) across the three
+runs: deliveries with at least one reused component or sequence gap.
+Each non-fresh frameset is counted once, and an unlabelled bar has NF~=~0.}
+\label{fig:main-matrix-max}
+\end{figure*}
